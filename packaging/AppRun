@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+# The supervisor and Steam helper outlive the GUI. Keep their executable and
+# shared libraries on disk after the AppImage runtime unmounts its filesystem.
+app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+build_id=$(cat "$app_dir/wallweave-build-id")
+cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/wallweave/appimage"
+cached="$cache_root/$build_id"
+umask 077
+mkdir -p -- "$cache_root"
+if [ ! -f "$cached/.ready" ]; then
+    staging=$(mktemp -d "$cache_root/.install-XXXXXX")
+    trap 'rm -rf -- "$staging"' EXIT HUP INT TERM
+    cp -a -- "$app_dir/usr" "$staging/usr"
+    touch "$staging/.ready"
+    if ! mv -T -- "$staging" "$cached" 2>/dev/null; then
+        # A concurrent first launch may already have published the same build.
+        [ -f "$cached/.ready" ] || exit 1
+        rm -rf -- "$staging"
+    fi
+    trap - EXIT HUP INT TERM
+fi
+exec "$cached/usr/run.sh" "$@"

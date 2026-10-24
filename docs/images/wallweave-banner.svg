@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="Wallweave — A little motion. Your own desktop.">
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#151a22"/><stop offset="1" stop-color="#252f40"/></linearGradient>
+    <linearGradient id="line"><stop stop-color="#73b9ff" stop-opacity="0"/><stop offset=".5" stop-color="#73b9ff"/><stop offset="1" stop-color="#73b9ff" stop-opacity="0"/></linearGradient>
+  </defs>
+  <rect width="1280" height="360" rx="20" fill="url(#bg)"/>
+  <g fill="none" stroke="url(#line)" stroke-width="1.5" opacity=".36">
+    <path d="M640 45C820 5 820 280 1040 240s200-140 300-60"/>
+    <path d="M620 75C800 35 820 310 1040 270s200-140 300-60"/>
+    <path d="M600 105C780 65 820 340 1040 300s200-140 300-60"/>
+    <path d="M580 135C760 95 820 370 1040 330s200-140 300-60"/>
+    <path d="M660 15C840-25 820 250 1040 210s200-140 300-60"/>
+  </g>
+  <g transform="translate(64 78)">
+    <rect width="82" height="82" rx="21" fill="#202b3a" stroke="#3e5f82"/>
+    <circle cx="41" cy="41" r="26" fill="none" stroke="#73b9ff" stroke-width="2.8"/>
+    <path d="m21 53 13-25 7 17 8-17 12 25" fill="none" stroke="#e9edf3" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="105" y="58" font-family="Inter,DejaVu Sans,sans-serif" font-size="57" font-weight="700" letter-spacing="-2" fill="#edf3fa">Wallweave</text>
+    <text x="2" y="145" font-family="Inter,DejaVu Sans,sans-serif" font-size="25" fill="#bed1e6">A little motion. Your own desktop.</text>
+    <text x="2" y="187" font-family="Inter,DejaVu Sans,sans-serif" font-size="15" letter-spacing="2" fill="#739ac4">WALLPAPER ENGINE LIBRARIES · NATIVE LINUX APP</text>
+  </g>
+</svg>

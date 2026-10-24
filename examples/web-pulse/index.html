@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Wallweave Pulse</title>
+<style>
+  :root { --accent:147,218,191; } * {box-sizing:border-box} body {margin:0;background:#11171f;color:#e7ecf2;font:16px system-ui;overflow:hidden}
+  main {height:100vh;display:grid;place-content:center;text-align:center} h1 {font-size:clamp(28px,5vw,64px);letter-spacing:-.05em;margin:0}
+  p {color:#a0acbb} #ring {width:260px;height:260px;border:1px solid rgba(var(--accent),.4);border-radius:50%;margin:0 auto 40px;position:relative}
+  #ring::after {content:"";position:absolute;inset:25px;border:2px solid rgb(var(--accent));border-radius:50%;box-shadow:0 0 60px rgba(var(--accent),.15)}
+  #state {position:fixed;bottom:24px;left:28px;font:12px monospace;color:#a0acbb;white-space:pre-line;text-align:left}
+</style><main><div id="ring"></div><h1>wallweave</h1><p>A little motion. Your own desktop.</p></main><output id="state"></output>
+<script>
+  let speed=1, paused=false, audio=0, properties=0, last=performance.now(), phase=0;
+  const state=document.getElementById('state'), ring=document.getElementById('ring');
+  window.wallpaperPropertyListener={
+    applyUserProperties(p) {
+      properties++;
+      if(p.speed) speed=Number(p.speed.value);
+      if(p.accent) document.documentElement.style.setProperty('--accent',String(p.accent.value).split(' ').map(v=>Math.round(Number(v)*255)).join(','));
+    },
+    setPaused(value) { paused=Boolean(value); }
+  };
+  if(typeof window.wallpaperRegisterAudioListener==='function') {
+    window.wallpaperRegisterAudioListener(values=>{ audio=values.slice(0,8).reduce((a,b)=>a+b,0)/8; });
+  }
+  function frame(now) {
+    const dt=Math.min((now-last)/1000,.1);last=now;
+    if(!paused) phase+=dt*speed;
+    ring.style.transform=`scale(${1+Math.sin(phase)*.045+Math.min(audio,.8)*.15})`;
+    state.textContent=`Local web fixture\nProperty updates: ${properties}\nAudio: ${audio.toFixed(3)}\nPaused: ${paused}`;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+</script></html>

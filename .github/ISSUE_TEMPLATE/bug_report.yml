@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a reproducible problem in Wallweave.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include steps to reproduce and what you expected.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Wallweave version, Linux distribution, desktop/compositor and renderer version.
+    validations:
+      required: true
+  - type: input
+    id: wallpaper
+    attributes:
+      label: Wallpaper
+      description: Workshop link or ID, if applicable. Does window preview also fail?
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Relevant doctor --json output or Activity logs. Remove private paths.
+      render: text

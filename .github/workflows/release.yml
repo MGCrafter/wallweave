@@ -1,0 +1,119 @@
+name: Linux release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libdbus-1-dev libudev-dev patchelf desktop-file-utils
+      - name: Validate
+        run: |
+          cargo fmt --check
+          cargo test --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo check --locked --no-default-features
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version = re.search(r'^version = "([^"]+)"', Path('Cargo.toml').read_text(), re.M)[1]
+          assert os.environ['RELEASE_TAG'] == 'v' + version, 'Tag and Cargo.toml version differ'
+          PY
+      - name: Build application
+        run: python3 scripts/build-app.py
+      - name: Download pinned packaging tool
+        run: |
+          mkdir -p dist/tools
+          curl -fL --retry 3 -o dist/tools/linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20250213-2/linuxdeploy-x86_64.AppImage
+          echo '4648f278ab3ef31f819e67c30d50f462640e5365a77637d7e6f2ad9fd0b4522a  dist/tools/linuxdeploy-x86_64.AppImage' | sha256sum -c -
+          chmod +x dist/tools/linuxdeploy-x86_64.AppImage
+      - name: Package Linux release
+        run: python3 scripts/package-linux.py --linuxdeploy dist/tools/linuxdeploy-x86_64.AppImage
+      - name: Smoke-test packaged application
+        run: python3 scripts/test-linux-package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wallweave-linux-x86_64
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
+            dist/install-renderer.py
+            dist/PKGBUILD
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  arch:
+    needs: build
+    runs-on: ubuntu-22.04
+    container: archlinux/archlinux:base-devel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wallweave-linux-x86_64
+          path: dist
+      - name: Install Arch runtime dependencies
+        run: pacman -Syu --noconfirm libxkbcommon wayland libglvnd libx11 libxcursor libxi libxrandr dbus python
+      - name: Build native Arch package
+        working-directory: dist
+        run: |
+          useradd -m builder
+          chown -R builder:builder .
+          runuser -u builder -- makepkg --noconfirm --cleanbuild
+          runuser -u builder -- makepkg --printsrcinfo > .SRCINFO
+      - name: Test installation and removal in clean Arch Linux
+        run: |
+          pacman -U --noconfirm dist/wallweave-*.pkg.tar.zst
+          wallweave --version
+          mkdir -p /tmp/wallweave-smoke
+          echo 'discover_steam = false' > /tmp/wallweave-smoke/config.toml
+          WALLWEAVE_HOME=/tmp/wallweave-smoke wallweave doctor --json
+          WALLWEAVE_HOME=/tmp/wallweave-smoke wallweave inspect /usr/share/wallweave/examples/web-pulse
+          pacman -R --noconfirm wallweave
+          test ! -e /usr/bin/wallweave
+          test -f /tmp/wallweave-smoke/config.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wallweave-arch-x86_64
+          path: dist/*.pkg.tar.zst
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, arch]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wallweave-*-x86_64
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          (cd dist && sha256sum *.tar.gz *.AppImage *.pkg.tar.zst install-renderer.py PKGBUILD > SHA256SUMS)
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*.AppImage dist/*.pkg.tar.zst dist/install-renderer.py dist/PKGBUILD dist/SHA256SUMS --verify-tag --title "Wallweave $RELEASE_TAG · Linux" --notes-file docs/RELEASE.md --latest

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Wallweave
+Comment=Wallpaper Engine libraries on Linux
+Exec=wallweave gui
+Icon=io.wallweave.Wallweave
+Terminal=false
+Categories=Utility;Graphics;
+StartupWMClass=io.wallweave.Wallweave
