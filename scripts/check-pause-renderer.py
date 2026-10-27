@@ -91,6 +91,12 @@ def main():
         config = root / "config/wireplumber/wireplumber.conf.d"
         config.mkdir(parents=True, exist_ok=True)
         (config / "10-lab.conf").write_text("wireplumber.profiles = { main = { hardware.audio = disabled hardware.bluetooth = disabled hardware.video-capture = disabled } }\n")
+        # WirePlumber 0.4 uses Lua instead of 0.5's profiles. In a container its
+        # ALSA monitor otherwise exits on missing logind before creating policy.
+        for group, monitors in (("main", ("alsa_monitor", "v4l2_monitor")), ("bluetooth", ("bluez_monitor",))):
+            legacy = config.parent / f"{group}.lua.d"
+            legacy.mkdir(exist_ok=True)
+            (legacy / "89-lab.lua").write_text("\n".join(f"{monitor}.enable = function() end" for monitor in monitors) + "\n")
         read_fd, write_fd = os.pipe()
         spawn("xvfb", args.xvfb, "-displayfd", write_fd, "-screen", "0", "640x360x24", "-nolisten", "tcp", "-ac", pass_fds=(write_fd,))
         os.close(write_fd)
@@ -103,7 +109,9 @@ def main():
         wait_for(lambda: "Server Name" in command("pactl", "info"), "Isolated audio server unavailable")
         command("pactl", "load-module", "module-null-sink", "sink_name=wallweave_test", "rate=48000", "channels=2")
         wait_for(lambda: "wallweave_test" in command("pactl", "list", "short", "sinks"), "Isolated test sink unavailable")
-        wait_for(lambda: command("pactl", "set-default-sink", "wallweave_test") == "", "Isolated default sink unavailable")
+        # Route only these test clients. Older PipeWire versions do not expose
+        # default-sink metadata in a minimal session without systemd/logind.
+        os.environ["PULSE_SINK"] = "wallweave_test"
         folder = root / "video"
         folder.mkdir(exist_ok=True)
         (folder / "project.json").write_text(json.dumps({"title": "Pause fixture", "type": "video", "file": "test.mp4"}))
