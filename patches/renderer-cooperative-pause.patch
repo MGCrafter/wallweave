@@ -1,0 +1,139 @@
+diff --git a/src/WallpaperEngine/Application/ApplicationContext.cpp b/src/WallpaperEngine/Application/ApplicationContext.cpp
+index 9d1e6ba..df7d8a8 100644
+--- a/src/WallpaperEngine/Application/ApplicationContext.cpp
++++ b/src/WallpaperEngine/Application/ApplicationContext.cpp
+@@ -1337,6 +1337,15 @@ void ApplicationContext::loadSettingsFromArgv () {
+ 	    this->settings.render.videoSegments = *segments;
+ 	});
+ 
++    configurationGroup.add_argument ("--pause-control-file")
++        .help ("Cooperative pause control: a regular file containing pause\n renewed at least once a second. "
++               "Any other content, a missing file or a three-second stale lease resumes playback. Audio threads stay running.")
++        .action ([this] (const std::string& value) -> void {
++            if (!value.empty ()) {
++                this->settings.general.pauseControlFile = value;
++            }
++        });
++
+     configurationGroup.add_argument ("--control-file")
+ 	.help (
+ 	    "File the SIGUSR1 hotswap request is read from. Give every engine its own when several run at once, "
+diff --git a/src/WallpaperEngine/Application/ApplicationContext.h b/src/WallpaperEngine/Application/ApplicationContext.h
+index 0b923a5..6e19f8b 100644
+--- a/src/WallpaperEngine/Application/ApplicationContext.h
++++ b/src/WallpaperEngine/Application/ApplicationContext.h
+@@ -146,6 +146,7 @@ public:
+ 	    uint32_t webHostWidth;
+ 	    uint32_t webHostHeight;
+ 	    std::optional<std::filesystem::path> controlFile;
++	    std::optional<std::filesystem::path> pauseControlFile;
+ 	} general;
+ 
+ 	struct {
+@@ -256,6 +257,7 @@ public:
+             .webHostWidth = 0,
+             .webHostHeight = 0,
+             .controlFile = std::nullopt,
++            .pauseControlFile = std::nullopt,
+         },
+         .render = {
+             .mode = NORMAL_WINDOW,
+diff --git a/src/WallpaperEngine/Application/PauseControl.h b/src/WallpaperEngine/Application/PauseControl.h
+new file mode 100644
+index 0000000..2442912
+--- /dev/null
++++ b/src/WallpaperEngine/Application/PauseControl.h
+@@ -0,0 +1,27 @@
++// Wallweave cooperative pause adapter. Do not suspend an audio client process.
++#pragma once
++#include <ctime>
++#include <filesystem>
++#include <fcntl.h>
++#include <string_view>
++#include <sys/stat.h>
++#include <unistd.h>
++
++namespace WallpaperEngine::Application {
++inline bool readPauseControl (const std::filesystem::path& path) {
++    // Nonblocking even if a bad path names a FIFO. Bound all reads and fail open.
++    const int fd = open (path.c_str (), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
++    if (fd < 0) {
++        return false;
++    }
++    struct stat info {};
++    char value[6] {};
++    const auto now = std::time (nullptr);
++    const bool paused = fstat (fd, &info) == 0 && S_ISREG (info.st_mode)
++        && info.st_size == sizeof (value) && now >= info.st_mtime && now - info.st_mtime < 3
++        && read (fd, value, sizeof (value)) == sizeof (value)
++        && std::string_view (value, sizeof (value)) == "pause\n";
++    close (fd);
++    return paused;
++}
++}
+diff --git a/src/WallpaperEngine/Application/WallpaperApplication.cpp b/src/WallpaperEngine/Application/WallpaperApplication.cpp
+index 195f23d..a3f44a4 100644
+--- a/src/WallpaperEngine/Application/WallpaperApplication.cpp
++++ b/src/WallpaperEngine/Application/WallpaperApplication.cpp
+@@ -1,5 +1,6 @@
+ #include "WallpaperApplication.h"
+ #include "ControlFileOwner.h"
++#include "PauseControl.h"
+ 
+ #include <cstdlib>
+ 
+@@ -1558,9 +1559,19 @@ int WallpaperApplication::frameRateLimit () const {
+     return render.maximumFPS;
+ }
+ 
+-uint32_t WallpaperApplication::pauseReasons () const {
++uint32_t WallpaperApplication::pauseReasons () {
+     const auto& render = this->m_context.settings.render;
+     uint32_t reasons = 0;
++    if (const auto& path = this->m_context.settings.general.pauseControlFile; path.has_value ()) {
++        const auto now = std::chrono::steady_clock::now ();
++        if (now >= this->m_externalPauseCheck) {
++            this->m_externalPaused = readPauseControl (*path);
++            this->m_externalPauseCheck = now + std::chrono::milliseconds (100);
++        }
++        if (this->m_externalPaused) {
++            reasons |= PauseExternal;
++        }
++    }
+ 
+     if (this->m_fullScreenDetector->anythingFullscreen ()) {
+ 	reasons |= PauseWindows;
+@@ -1594,7 +1605,7 @@ void WallpaperApplication::logPauseReasons (uint32_t reasons) {
+     std::string names;
+ 
+     for (const auto& [bit, name] : { std::pair { PauseWindows, "windows" }, std::pair { PauseBattery, "battery" },
+-				     std::pair { PauseIdle, "idle" } }) {
++				     std::pair { PauseIdle, "idle" }, std::pair { PauseExternal, "external" } }) {
+ 	if (reasons & bit) {
+ 	    names += names.empty () ? name : std::string (", ") + name;
+ 	}
+diff --git a/src/WallpaperEngine/Application/WallpaperApplication.h b/src/WallpaperEngine/Application/WallpaperApplication.h
+index 2b41072..540a322 100644
+--- a/src/WallpaperEngine/Application/WallpaperApplication.h
++++ b/src/WallpaperEngine/Application/WallpaperApplication.h
+@@ -121,7 +121,7 @@ private:
+     void applyIdlePauseHotswap (const std::string& value);
+     void updatePowerMonitor ();
+     [[nodiscard]] int frameRateLimit () const;
+-    [[nodiscard]] uint32_t pauseReasons () const;
++    [[nodiscard]] uint32_t pauseReasons ();
+     void logPauseReasons (uint32_t reasons);
+ 
+     void applyXrayHotswap (const std::string& value);
+@@ -208,8 +208,11 @@ private:
+ 	PauseWindows = 1,
+ 	PauseBattery = 2,
+ 	PauseIdle = 4,
++	PauseExternal = 8,
+     };
+     uint32_t m_pauseReasons = 0;
++    bool m_externalPaused = false;
++    std::chrono::steady_clock::time_point m_externalPauseCheck {};
+     bool m_showFrameWhilePaused = false;
+     std::unique_ptr<WallpaperEngine::Desktop::PowerMonitor> m_powerMonitor = nullptr;
+     bool m_screenShotTaken = false;

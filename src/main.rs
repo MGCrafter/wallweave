@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use wallweave::{
-    config::{Paths, absolute},
+    config::{AutoPause, Paths, absolute},
     desktop, library, renderer,
     service::{self, Request},
     workshop,
@@ -32,6 +32,10 @@ enum Action {
         workshop: Option<String>,
         #[arg(long, conflicts_with = "workshop")]
         wallpaper: Option<String>,
+        #[arg(long, conflicts_with_all = ["workshop", "wallpaper"])]
+        settings: bool,
+        #[arg(long, conflicts_with_all = ["workshop", "wallpaper", "settings"])]
+        settings_files: bool,
     },
     /// Browse and download Wallpaper Engine items through the running Steam client.
     #[command(subcommand)]
@@ -104,10 +108,23 @@ enum Action {
 #[derive(Subcommand)]
 enum ConfigAction {
     Show,
-    AddLibrary { path: PathBuf },
-    RemoveLibrary { path: PathBuf },
-    Assets { path: PathBuf },
-    Renderer { path: PathBuf },
+    AddLibrary {
+        path: PathBuf,
+    },
+    RemoveLibrary {
+        path: PathBuf,
+    },
+    Assets {
+        path: PathBuf,
+    },
+    Renderer {
+        path: PathBuf,
+    },
+    /// Automatically pause for apps/games: focused (default), fullscreen, or off.
+    AutoPause {
+        #[arg(value_enum)]
+        mode: AutoPause,
+    },
 }
 
 #[derive(Subcommand)]
@@ -237,7 +254,7 @@ fn print_response(paths: &Paths, request: Request, start: bool) -> Result<()> {
         println!(
             "{}  {}  {}  pid={}  log={}",
             state.output,
-            if state.paused { "paused" } else { "running" },
+            state.playback_label(),
             state.title,
             state.pid,
             state.log.display()
@@ -275,12 +292,14 @@ fn main() -> Result<()> {
             path,
             workshop,
             wallpaper,
+            settings,
+            settings_files,
         } => {
             #[cfg(feature = "gui")]
-            wallweave::gui::snapshot(paths, path, workshop, wallpaper)?;
+            wallweave::gui::snapshot(paths, path, workshop, wallpaper, settings, settings_files)?;
             #[cfg(not(feature = "gui"))]
             {
-                let _ = (path, workshop, wallpaper);
+                let _ = (path, workshop, wallpaper, settings, settings_files);
                 anyhow::bail!("UI snapshots require the GUI feature");
             }
         }
@@ -354,7 +373,7 @@ fn main() -> Result<()> {
         } => {
             let config = paths.load()?;
             let engine = renderer::Renderer::detect(&config)?;
-            let plan = renderer::plan(
+            let mut plan = renderer::plan(
                 &engine,
                 &config,
                 library::resolve(&target, &config)?,
@@ -362,6 +381,11 @@ fn main() -> Result<()> {
                 preview,
                 &properties.into_iter().collect(),
             )?;
+            plan.auto_pause(
+                &engine,
+                AutoPause::load(&paths)?,
+                wallweave::visibility::socket_path().is_some(),
+            );
             println!("{}", plan.display());
         }
         Action::Apply {
@@ -403,7 +427,7 @@ fn main() -> Result<()> {
                     println!(
                         "{}  {}  {}",
                         state.output,
-                        if state.paused { "paused" } else { "running" },
+                        state.playback_label(),
                         state.title
                     );
                 }
@@ -455,6 +479,14 @@ fn main() -> Result<()> {
                 }
                 ConfigAction::Assets { path } => config.assets = Some(absolute(&path)?),
                 ConfigAction::Renderer { path } => config.renderer = Some(absolute(&path)?),
+                ConfigAction::AutoPause { mode } => {
+                    mode.save(&paths)?;
+                    println!("Automatic pause: {}", mode.label());
+                    if service::client(&paths, &Request::Status).is_ok() {
+                        print_response(&paths, Request::ReloadPlayback, false)?;
+                    }
+                    return Ok(());
+                }
             }
             paths.save(&config).context("Save configuration")?;
             println!("Saved {}", paths.config.display());

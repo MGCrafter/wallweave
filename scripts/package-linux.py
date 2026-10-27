@@ -69,10 +69,13 @@ def main() -> None:
         portable.mkdir()
         for name in ("bin/wallweave", "bin/libsteam_api.so", "run.sh", "LICENSE", "README.md", "docs", "examples", "packaging"):
             copy(ROOT / name, portable / name)
-        for name in ("install-renderer.py", "install-app.py"):
+        for name in ("install-renderer.py", "install-app.py", "build-pause-renderer.py", "check-pause-renderer.py"):
             copy(ROOT / "scripts" / name, portable / "scripts" / name)
         copy(ROOT / "scripts/install-app.py", portable / "install.py")
-        copy(ROOT / "assets/fonts/OFL.txt", portable / "licenses/fonts/OFL.txt")
+        copy(ROOT / "patches/renderer-cooperative-pause.patch", portable / "patches/renderer-cooperative-pause.patch")
+        copy(ROOT / "tests/native_pause_control.cpp", portable / "tests/native_pause_control.cpp")
+        for name in ("OFL.txt", "IBM-Plex-OFL.txt", "Lucide-LICENSE.txt"):
+            copy(ROOT / "assets/fonts" / name, portable / "licenses/fonts" / name)
         licenses(portable / "licenses/dependencies")
         archive = output / f"{stem}.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
@@ -81,7 +84,7 @@ def main() -> None:
 
         if args.linuxdeploy:
             appdir = temporary / "Wallweave.AppDir"
-            for name in ("bin", "run.sh", "scripts", "docs", "licenses", "LICENSE", "README.md", "examples"):
+            for name in ("bin", "run.sh", "scripts", "patches", "tests", "docs", "licenses", "LICENSE", "README.md", "examples"):
                 copy(portable / name, appdir / "usr" / name)
             copy(ROOT / "packaging/io.wallweave.Wallweave.desktop", appdir / "usr/share/applications/io.wallweave.Wallweave.desktop")
             copy(ROOT / "packaging/io.wallweave.Wallweave.svg", appdir / "usr/share/icons/hicolor/scalable/apps/io.wallweave.Wallweave.svg")

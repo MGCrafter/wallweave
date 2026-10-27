@@ -32,7 +32,7 @@ impl Default for WorkshopUi {
             page: None,
             selected: None,
             request: 0,
-            message: "Connect to the running Steam client to browse wallpapers.".into(),
+            message: "Verbinde dich mit Steam, um Wallpaper zu entdecken.".into(),
             error: false,
             jobs: BTreeMap::new(),
             titles: BTreeMap::new(),
@@ -69,14 +69,41 @@ impl WorkshopUi {
 
 fn phase_label(phase: &Phase) -> &'static str {
     match phase {
-        Phase::Waiting => "Waiting in Wallweave",
-        Phase::Checking => "Checking wallpaper…",
-        Phase::Subscribing => "Subscribing in Steam…",
-        Phase::Queued => "Queued in Steam",
-        Phase::Downloading => "Downloading",
-        Phase::Installing => "Steam is finishing installation…",
-        Phase::Complete => "Download complete",
-        Phase::Failed => "Download failed",
+        Phase::Waiting => "Wartet in Wallweave",
+        Phase::Checking => "Wallpaper wird geprüft …",
+        Phase::Subscribing => "Wird in Steam abonniert …",
+        Phase::Queued => "Wartet in Steam",
+        Phase::Downloading => "Wird heruntergeladen",
+        Phase::Installing => "Steam schließt die Installation ab …",
+        Phase::Complete => "Download abgeschlossen",
+        Phase::Failed => "Download fehlgeschlagen",
+    }
+}
+
+fn order_label(order: Order) -> &'static str {
+    match order {
+        Order::Popular => "Diese Woche beliebt",
+        Order::PopularToday => "Heute beliebt",
+        Order::PopularMonth => "Diesen Monat beliebt",
+        Order::PopularYear => "Dieses Jahr beliebt",
+        Order::PopularAllTime => "Am besten bewertet",
+        Order::Newest => "Neu erschienen",
+        Order::Subscriptions => "Meine Abonnements",
+    }
+}
+
+fn category_label(category: &str) -> &str {
+    match category {
+        "" => "Alle Kategorien",
+        "Nature" => "Natur",
+        "Landscape" => "Landschaft",
+        "Abstract" => "Abstrakt",
+        "Technology" => "Technik",
+        "Game" => "Spiele",
+        "Music" => "Musik",
+        "Relaxing" => "Entspannung",
+        "Space" => "Weltraum",
+        _ => category,
     }
 }
 
@@ -378,38 +405,53 @@ impl App {
     }
 
     pub(super) fn workshop_filters(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Discover");
-        ui.add_space(10.0);
+        ui.label(RichText::new("Entdecken").small().color(MUTED));
+        ui.add_space(8.0);
         let mut changed = false;
         ui.add_enabled_ui(self.workshop.connected && !self.workshop.searching, |ui| {
-            ui.label(RichText::new("Sort by").strong());
-            egui::ComboBox::from_id_salt("workshop_order").width(145.0)
-                .selected_text(self.workshop.search.order.label())
-                .show_ui(ui, |ui| {
-                    for &(order, label) in Order::OPTIONS {
-                        changed |= ui.selectable_value(&mut self.workshop.search.order, order, label).changed();
-                    }
-                });
-            ui.add_space(14.0);
-            changed |= ui.checkbox(&mut self.workshop.search.show_nsfw, "Show NSFW")
-                .on_hover_text("Include Mature and Questionable wallpapers. Steam's account content preferences still apply.").changed();
-            ui.add_space(18.0);
-            ui.label(RichText::new("Wallpaper type").strong());
-            for &kind in workshop::KINDS {
-                changed |= ui
-                    .selectable_value(
-                        &mut self.workshop.search.kind,
-                        kind.to_owned(),
-                        if kind.is_empty() { "All types" } else { kind },
-                    )
-                    .changed();
+            for (order, icon, label) in [
+                (Order::Popular, Icon::TrendingUp, "Diese Woche beliebt"),
+                (Order::Newest, Icon::Sparkles, "Neu erschienen"),
+                (Order::Subscriptions, Icon::Bookmark, "Meine Abonnements"),
+            ] {
+                if theme::nav(ui, icon, label, None, self.workshop.search.order == order).clicked()
+                {
+                    self.workshop.search.order = order;
+                    changed = true;
+                }
             }
-            ui.add_space(18.0);
-            ui.label(RichText::new("Resolution").strong());
+            ui.add_space(24.0);
+            ui.label(RichText::new("Wallpaper-Typ").small().color(MUTED));
+            for &kind in workshop::KINDS {
+                let icon = match kind {
+                    "Scene" => Icon::Sparkles,
+                    "Video" => Icon::Film,
+                    "Web" => Icon::Globe,
+                    _ => Icon::LayoutGrid,
+                };
+                if theme::nav(
+                    ui,
+                    icon,
+                    if kind.is_empty() {
+                        "Alle Wallpaper"
+                    } else {
+                        theme::kind(kind)
+                    },
+                    None,
+                    self.workshop.search.kind == kind,
+                )
+                .clicked()
+                {
+                    self.workshop.search.kind = kind.into();
+                    changed = true;
+                }
+            }
+            ui.add_space(24.0);
+            ui.label(RichText::new("Auflösung").small().color(MUTED));
             egui::ComboBox::from_id_salt("workshop_resolution")
-                .width(145.0)
+                .width(ui.available_width() - 8.0)
                 .selected_text(if self.workshop.search.resolution.is_empty() {
-                    "All resolutions"
+                    "Alle Auflösungen"
                 } else {
                     &self.workshop.search.resolution
                 })
@@ -418,9 +460,9 @@ impl App {
                         changed |= ui
                             .selectable_value(
                                 &mut self.workshop.search.resolution,
-                                resolution.to_owned(),
+                                resolution.into(),
                                 if resolution.is_empty() {
-                                    "All resolutions"
+                                    "Alle Auflösungen"
                                 } else {
                                     resolution
                                 },
@@ -428,117 +470,220 @@ impl App {
                             .changed();
                     }
                 });
-            ui.add_space(18.0);
-            ui.label(RichText::new("Category").strong());
+            ui.add_space(16.0);
+            ui.label(RichText::new("Kategorie").small().color(MUTED));
             egui::ComboBox::from_id_salt("workshop_category")
-                .width(145.0)
-                .selected_text(if self.workshop.search.category.is_empty() {
-                    "All categories"
-                } else {
-                    &self.workshop.search.category
-                })
+                .width(ui.available_width() - 8.0)
+                .selected_text(category_label(&self.workshop.search.category))
                 .show_ui(ui, |ui| {
                     for &category in workshop::CATEGORIES {
                         changed |= ui
                             .selectable_value(
                                 &mut self.workshop.search.category,
-                                category.to_owned(),
-                                if category.is_empty() {
-                                    "All categories"
-                                } else {
-                                    category
-                                },
+                                category.into(),
+                                category_label(category),
                             )
                             .changed();
                     }
                 });
-            ui.add_space(18.0);
-            if ui.button("Reset filters").clicked() {
+            ui.add_space(20.0);
+            changed |= ui
+                .checkbox(&mut self.workshop.search.show_nsfw, "NSFW anzeigen")
+                .on_hover_text(
+                    "Steam berücksichtigt weiterhin die Inhaltseinstellungen deines Accounts.",
+                )
+                .changed();
+            ui.add_space(12.0);
+            if theme::button(ui, Icon::RotateCcw, "Filter zurücksetzen", false).clicked() {
                 self.workshop.search = Search::default();
                 changed = true;
             }
         });
         if changed {
-            let prefs = Preferences {
-                order: self.workshop.search.order,
-                show_nsfw: self.workshop.search.show_nsfw,
-            };
-            if let Err(error) = self.write_workshop_state("workshop-preferences.json", &prefs) {
-                self.workshop.message = error.to_string();
-                self.workshop.error = true;
-            }
-            self.workshop.search.page = 1;
-            self.workshop_search();
+            self.workshop_filters_changed();
         }
-        ui.add_space(18.0);
+        ui.add_space(24.0);
         ui.separator();
         ui.label(
-            RichText::new("Downloads use your current Steam account. Steam must stay running.")
+            RichText::new("Downloads laufen über deinen Steam-Account. Lass Steam dafür geöffnet.")
                 .small()
                 .color(MUTED),
         );
     }
 
+    fn workshop_filters_changed(&mut self) {
+        let prefs = Preferences {
+            order: self.workshop.search.order,
+            show_nsfw: self.workshop.search.show_nsfw,
+        };
+        if let Err(error) = self.write_workshop_state("workshop-preferences.json", &prefs) {
+            self.workshop.message = error.to_string();
+            self.workshop.error = true;
+        }
+        self.workshop.search.page = 1;
+        self.workshop_search();
+    }
+
     pub(super) fn workshop_browser(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.horizontal(|ui| {
-            ui.heading("Steam Workshop");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.workshop.connected {
-                    ui.colored_label(ACCENT, "Steam connected");
-                } else if self.workshop.connecting {
-                    ui.spinner();
-                } else if ui.button("Connect to Steam").clicked() {
-                    self.connect_workshop();
-                }
+        ui.label(theme::heading("Entdecke deinen nächsten Desktop.", 26.0));
+        ui.label(
+            RichText::new("Wallpaper aus der Community. Direkt in deiner Sammlung.").color(MUTED),
+        );
+        if self.workshop.connecting {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.colored_label(MUTED, "Verbindung mit Steam wird hergestellt …");
             });
-        });
-        ui.add_space(8.0);
+        }
+        ui.add_space(18.0);
         ui.add_enabled_ui(self.workshop.connected && !self.workshop.searching, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Search");
-                let response = ui.add(
+                theme::icon(ui, Icon::Search, 18.0, MUTED);
+                let r = ui.add(
                     egui::TextEdit::singleline(&mut self.workshop.search.text)
-                        .hint_text("Words, Workshop ID or Steam link")
+                        .hint_text("Wallpaper, Workshop-ID oder Steam-Link suchen …")
                         .char_limit(512)
-                        .desired_width((ui.available_width() - 96.0).max(100.0)),
+                        .desired_width((ui.available_width() - 100.0).max(80.0)),
                 );
-                if ui.button("Search").clicked()
-                    || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                if theme::button(ui, Icon::Search, "Suchen", false).clicked()
+                    || r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
                 {
                     self.workshop.search.page = 1;
                     self.workshop_search();
                 }
             });
-        });
-        ui.horizontal_wrapped(|ui| {
-            if self.workshop.searching {
-                ui.spinner();
+            let mut changed = false;
+            ui.horizontal_wrapped(|ui| {
+                for category in ["", "Nature", "Anime", "Sci-Fi", "Abstract", "Space"] {
+                    if ui
+                        .selectable_label(
+                            self.workshop.search.category == category,
+                            category_label(category),
+                        )
+                        .clicked()
+                    {
+                        self.workshop.search.category = category.into();
+                        changed = true;
+                    }
+                }
+            });
+            if changed {
+                self.workshop_filters_changed();
             }
-            ui.colored_label(
-                if self.workshop.error { DANGER } else { MUTED },
-                &self.workshop.message,
-            );
         });
+        ui.add_space(12.0);
+        if self.workshop.searching {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.colored_label(MUTED, "Wallpaper werden geladen …");
+            });
+        }
+        if self.workshop.error {
+            ui.colored_label(DANGER, &self.workshop.message);
+        }
         if !self.workshop.connected && !self.workshop.connecting {
-            ui.add_space(20.0);
-            ui.label("Start Steam and sign in with the account that owns Wallpaper Engine, then connect here.");
-            ui.colored_label(MUTED, "Your existing Steam session is used. No password or API key is needed in Wallweave.");
+            ui.add_space(30.0);
+            theme::section().show(ui,|ui| {
+                theme::icon(ui,Icon::Compass,32.0,ACCENT);
+                ui.label(theme::heading("Deine Community wartet.",23.0));
+                ui.label("Starte Steam mit dem Account, der Wallpaper Engine besitzt, und verbinde dich hier.");
+                ui.colored_label(MUTED,"Wallweave verwendet deine bestehende Steam-Sitzung.");
+                ui.add_space(12.0);
+                if theme::button(ui,Icon::Unplug,"Mit Steam verbinden",true).clicked(){self.connect_workshop();}
+            });
         }
         let Some(page) = self.workshop.page.clone() else {
             return;
         };
+        if page.items.is_empty() {
+            ui.add_space(24.0);
+            ui.label(theme::heading("Keine passenden Wallpaper", 23.0));
+            ui.colored_label(
+                MUTED,
+                "Versuche andere Suchbegriffe oder setze die Filter zurück.",
+            );
+            return;
+        }
+        if ui.available_height() > 620.0
+            && self.workshop.search.text.is_empty()
+            && page.page == 1
+            && let Some(featured) = page.items.first()
+        {
+            let response = ui.allocate_response(
+                egui::vec2(ui.available_width(), 160.0),
+                egui::Sense::click(),
+            );
+            let rect = response.rect;
+            self.workshop_art(ui, featured, rect, ctx);
+            ui.painter()
+                .rect_filled(rect, 6.0, Color32::from_black_alpha(150));
+            ui.painter().text(
+                rect.left_top() + egui::vec2(24.0, 22.0),
+                egui::Align2::LEFT_TOP,
+                order_label(self.workshop.search.order),
+                egui::FontId::proportional(12.0),
+                ACCENT,
+            );
+            let mut title = egui::text::LayoutJob::simple(
+                featured.title.clone(),
+                egui::FontId::new(25.0, egui::FontFamily::Name("heading".into())),
+                TEXT,
+                rect.width() - 48.0,
+            );
+            title.wrap.max_rows = 2;
+            let title = ui.fonts(|f| f.layout_job(title));
+            ui.painter()
+                .galley(rect.left_top() + egui::vec2(24.0, 48.0), title, TEXT);
+            ui.painter().text(
+                rect.left_bottom() + egui::vec2(24.0, -22.0),
+                egui::Align2::LEFT_BOTTOM,
+                "Wallpaper ansehen  →",
+                egui::FontId::proportional(13.0),
+                TEXT,
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &featured.title)
+            });
+            if response.clicked() {
+                self.workshop.selected = Some(featured.id);
+            }
+            ui.add_space(18.0);
+        }
         ui.add_enabled_ui(!self.workshop.searching && self.workshop.connected, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(theme::heading("Aus dem Workshop", 17.0));
+                egui::ComboBox::from_id_salt("workshop_order")
+                    .width(164.0)
+                    .selected_text(order_label(self.workshop.search.order))
+                    .show_ui(ui, |ui| {
+                        let mut changed = false;
+                        for &(order, _) in Order::OPTIONS {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut self.workshop.search.order,
+                                    order,
+                                    order_label(order),
+                                )
+                                .changed();
+                        }
+                        if changed {
+                            self.workshop_filters_changed();
+                        }
+                    });
                 if ui
-                    .add_enabled(page.page > 1, egui::Button::new("Previous"))
+                    .add_enabled(page.page > 1, egui::Button::new("Zurück"))
                     .clicked()
                 {
                     self.workshop.search.page = page.page - 1;
                     self.workshop_search();
                 }
-                ui.label(format!("Page {}", page.page));
+                ui.label(
+                    RichText::new(format!("Seite {}", page.page))
+                        .small()
+                        .color(MUTED),
+                );
                 if ui
-                    .add_enabled(page.has_next, egui::Button::new("Next"))
+                    .add_enabled(page.has_next, egui::Button::new("Weiter"))
                     .clicked()
                 {
                     self.workshop.search.page = page.page + 1;
@@ -546,24 +691,18 @@ impl App {
                 }
             });
         });
-        ui.add_space(6.0);
-        if page.items.is_empty() {
-            ui.add_space(24.0);
-            ui.heading("No matching wallpapers");
-            ui.colored_label(MUTED, "Try different words or reset the filters. Item links must belong to Wallpaper Engine.");
-            return;
-        }
-        let gap = 10.0;
+        ui.add_space(12.0);
+        let gap = 16.0;
         let width = (ui.available_width() - 10.0).max(100.0);
-        let columns = ((width + gap) / (182.0 + gap)).floor().max(1.0) as usize;
+        let columns = ((width + gap) / (280.0 + gap)).floor().max(1.0) as usize;
         let tile_width = (width - gap * (columns - 1) as f32) / columns as f32;
-        let tile_height = tile_width * 0.625 + 72.0;
+        let tile_height = tile_width * 0.5625 + 78.0;
         egui::ScrollArea::vertical()
             .id_salt(("workshop_grid", self.workshop.request))
             .auto_shrink([false, false])
             .show_rows(
                 ui,
-                tile_height + gap,
+                tile_height,
                 page.items.len().div_ceil(columns),
                 |ui, rows| {
                     ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
@@ -598,15 +737,7 @@ impl App {
         if let Some(path) = path {
             self.request_thumbnail(&path, item.preview_url.clone(), ctx);
             if let Some(Some(texture)) = self.textures.get(&path) {
-                let image_size = texture.size_vec2();
-                let scale = (rect.width() / image_size.x).min(rect.height() / image_size.y);
-                let target = egui::Rect::from_center_size(rect.center(), image_size * scale);
-                ui.painter().image(
-                    texture.id(),
-                    target,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    Color32::WHITE,
-                );
+                theme::image(ui, texture, rect, true);
                 return;
             }
         }
@@ -632,7 +763,11 @@ impl App {
                     size,
                     egui::Button::new("")
                         .selected(self.workshop.selected == Some(item.id))
-                        .fill(SURFACE),
+                        .fill(if self.workshop.selected == Some(item.id) {
+                            theme::ACTIVE
+                        } else {
+                            PANEL
+                        }),
                 )
             })
             .inner;
@@ -647,21 +782,21 @@ impl App {
         if response.clicked() {
             self.workshop.selected = Some(item.id);
         }
-        let rect = response.rect.shrink(6.0);
+        let rect = response.rect.shrink(3.0);
         let image_rect =
-            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), size.x * 0.625 - 8.0));
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), size.x * 0.5625 - 3.0));
         self.workshop_art(ui, item, image_rect, ctx);
         let mut title_job = egui::text::LayoutJob::simple(
             item.title.clone(),
-            egui::FontId::proportional(14.0),
+            egui::FontId::new(15.0, egui::FontFamily::Name("heading".into())),
             TEXT,
-            rect.width(),
+            rect.width() - 18.0,
         );
         title_job.wrap.max_rows = 2;
         let title = ui.fonts(|fonts| fonts.layout_job(title_job));
         let text_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left(), image_rect.bottom() + 6.0),
-            egui::vec2(rect.width(), 34.0),
+            egui::pos2(rect.left() + 9.0, image_rect.bottom() + 10.0),
+            egui::vec2(rect.width() - 18.0, 40.0),
         );
         ui.painter()
             .with_clip_rect(text_rect)
@@ -674,12 +809,12 @@ impl App {
         let label = if let Some(job) = self.workshop.jobs.get(&item.id) {
             phase_label(&job.phase)
         } else if installed || item.installed {
-            "Installed"
+            "Installiert"
         } else {
-            item.kind()
+            theme::kind(item.kind())
         };
         ui.painter().with_clip_rect(response.rect).text(
-            egui::pos2(rect.left(), rect.bottom() - 2.0),
+            egui::pos2(rect.left() + 9.0, rect.bottom() - 8.0),
             egui::Align2::LEFT_BOTTOM,
             label,
             egui::FontId::proportional(12.0),
@@ -701,22 +836,26 @@ impl App {
             .cloned();
         if let Some(item) = item {
             let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), ui.available_width() * 0.625),
+                egui::vec2(ui.available_width(), ui.available_width() * 0.5625),
                 egui::Sense::hover(),
             );
             self.workshop_art(ui, &item, rect, ctx);
             ui.add_space(10.0);
-            ui.heading(&item.title);
-            ui.colored_label(MUTED, format!("{} · {}", item.kind(), item.id));
+            ui.label(theme::heading(&item.title, 23.0));
+            ui.colored_label(MUTED, format!("{} · {}", theme::kind(item.kind()), item.id));
             if item.nsfw {
-                ui.colored_label(DANGER, "NSFW");
+                theme::badge(ui, "NSFW", DANGER);
             }
-            ui.label(format!(
-                "{} · {} positive votes",
-                bytes(item.bytes),
-                item.votes
-            ));
-            ui.add_space(10.0);
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                theme::badge(ui, &bytes(item.bytes), MUTED);
+                theme::badge(
+                    ui,
+                    &format!("{} positive Bewertungen", item.votes),
+                    theme::SUCCESS,
+                );
+            });
+            ui.add_space(16.0);
             let local = self
                 .scan
                 .wallpapers
@@ -728,8 +867,12 @@ impl App {
                 if ui
                     .add_sized(
                         [ui.available_width(), 40.0],
-                        egui::Button::new(RichText::new("Open in Installed").color(BG))
-                            .fill(ACCENT),
+                        egui::Button::new(theme::button_text(
+                            Icon::PanelsTopLeft,
+                            "In der Bibliothek öffnen",
+                            BG,
+                        ))
+                        .fill(ACCENT),
                     )
                     .clicked()
                 {
@@ -741,19 +884,19 @@ impl App {
                 let failed = job.as_ref().is_some_and(|j| j.phase == Phase::Failed);
                 let unsupported = item.kind() == "Application";
                 let label = if active {
-                    "Download in progress…"
+                    "Download läuft …"
                 } else if failed {
-                    "Retry download"
+                    "Download wiederholen"
                 } else if item.installed {
-                    "Locate installed wallpaper"
+                    "Installiertes Wallpaper suchen"
                 } else {
-                    "Download & subscribe"
+                    "Abonnieren & herunterladen"
                 };
                 if ui
                     .add_enabled(
                         self.workshop.connected && !active && !unsupported,
-                        egui::Button::new(RichText::new(label).color(BG))
-                            .min_size(egui::vec2(ui.available_width(), 40.0))
+                        egui::Button::new(theme::button_text(Icon::Download, label, BG))
+                            .min_size(egui::vec2(ui.available_width(), 44.0))
                             .fill(ACCENT),
                     )
                     .clicked()
@@ -763,33 +906,47 @@ impl App {
                 if unsupported {
                     ui.colored_label(
                         DANGER,
-                        "Windows application wallpapers cannot run in Wallweave.",
+                        "Windows-Anwendungswallpaper laufen nicht in Wallweave.",
                     );
                 } else {
-                    ui.label(RichText::new("Steam stores the files in its library and keeps the wallpaper updated.").small().color(MUTED));
+                    ui.label(RichText::new("Steam speichert das Wallpaper in seiner Bibliothek und hält es aktuell.").small().color(MUTED));
                 }
             }
             ui.hyperlink_to(
-                "View Workshop page",
+                "Im Steam Workshop öffnen",
                 format!(
                     "https://steamcommunity.com/sharedfiles/filedetails/?id={}",
                     item.id
                 ),
             );
             if !item.tags.is_empty() {
-                ui.add_space(8.0);
-                ui.label(RichText::new(item.tags.join(" · ")).small().color(MUTED));
+                ui.add_space(16.0);
+                ui.separator();
+                ui.label(theme::heading("Über dieses Wallpaper", 15.0));
+                ui.horizontal_wrapped(|ui| {
+                    for tag in item.tags.iter().take(12) {
+                        theme::badge(ui, category_label(tag), MUTED);
+                    }
+                });
+            }
+            if !item.description.trim().is_empty() {
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new(item.description.chars().take(1200).collect::<String>())
+                        .small()
+                        .color(MUTED),
+                );
             }
         } else {
-            ui.heading("Choose a wallpaper");
-            ui.colored_label(MUTED, "Select a preview to see details and download it.");
+            ui.heading("Wallpaper auswählen");
+            ui.colored_label(MUTED, "Wähle ein Wallpaper für Details und Downloads.");
         }
         if !self.workshop.jobs.is_empty() {
             ui.add_space(18.0);
             ui.separator();
             let active = self.workshop.jobs.values().filter(|j| j.active()).count();
-            ui.heading(format!("Downloads · {active} active"));
-            ui.colored_label(MUTED, "Steam manages the download queue.");
+            ui.heading(format!("Downloads · {active} aktiv"));
+            ui.colored_label(MUTED, "Steam verwaltet die Download-Warteschlange.");
             let jobs: Vec<_> = self.workshop.jobs.values().cloned().collect();
             for job in jobs {
                 ui.push_id(("download", job.id), |ui| {
@@ -822,7 +979,7 @@ impl App {
                         ui.colored_label(DANGER, error);
                     }
                     if job.phase == Phase::Complete {
-                        if ui.button("Show in Installed").clicked() {
+                        if ui.button("In der Bibliothek anzeigen").clicked() {
                             if let Some(local) = self
                                 .scan
                                 .wallpapers
@@ -838,7 +995,7 @@ impl App {
                         }
                     } else if job.phase == Phase::Failed
                         && self.workshop.connected
-                        && ui.button("Retry").clicked()
+                        && ui.button("Erneut versuchen").clicked()
                         && let Some(session) = &self.workshop.session
                     {
                         match session.send(Command::Download { id: job.id }) {

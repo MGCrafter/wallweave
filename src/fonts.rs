@@ -5,11 +5,46 @@ use std::sync::Arc;
 /// font instead of relying on fonts installed on the user's machine.
 pub(crate) fn configure(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+    for (name, bytes) in [
+        (
+            "plex",
+            include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf").as_slice(),
+        ),
+        (
+            "plex-semibold",
+            include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf").as_slice(),
+        ),
+        (
+            "lucide",
+            include_bytes!("../assets/fonts/lucide.ttf").as_slice(),
+        ),
+    ] {
+        fonts
+            .font_data
+            .insert(name.into(), Arc::new(FontData::from_static(bytes)));
+    }
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "plex".into());
+    let mut heading = vec!["plex-semibold".into()];
+    heading.extend(fonts.families[&FontFamily::Proportional].clone());
+    fonts
+        .families
+        .insert(FontFamily::Name("heading".into()), heading);
+    fonts
+        .families
+        .insert(FontFamily::Name("icons".into()), vec!["lucide".into()]);
     let mut data = FontData::from_static(include_bytes!("../assets/fonts/NotoSansCJK-Regular.ttc"));
     data.index = 2; // Noto Sans CJK SC within the original, unmodified collection.
     let name = "wallweave-cjk".to_owned();
     fonts.font_data.insert(name.clone(), Arc::new(data));
-    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+    for family in [
+        FontFamily::Proportional,
+        FontFamily::Monospace,
+        FontFamily::Name("heading".into()),
+    ] {
         fonts.families.entry(family).or_default().push(name.clone());
     }
     ctx.set_fonts(fonts);

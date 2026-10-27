@@ -14,10 +14,10 @@ pub(super) enum Sort {
 
 impl Sort {
     pub const OPTIONS: &[(Self, &str)] = &[
-        (Self::Title, "Title"),
-        (Self::Type, "Type"),
-        (Self::SubscribedNewest, "Subscribed: newest first"),
-        (Self::SubscribedOldest, "Subscribed: oldest first"),
+        (Self::Title, "Titel"),
+        (Self::Type, "Typ"),
+        (Self::SubscribedNewest, "Zuletzt hinzugefügt"),
+        (Self::SubscribedOldest, "Älteste zuerst"),
     ];
 
     pub fn label(self) -> &'static str {
@@ -25,7 +25,7 @@ impl Sort {
             .iter()
             .find(|(sort, _)| *sort == self)
             .map(|(_, label)| *label)
-            .unwrap_or("Title")
+            .unwrap_or("Titel")
     }
 
     pub fn uses_subscription_date(self) -> bool {
@@ -217,42 +217,37 @@ impl App {
         rect: egui::Rect,
     ) -> egui::Response {
         let favorite = self.collection.is_favorite(wallpaper);
-        let response = ui.put(rect, egui::Button::new("").fill(BG).selected(favorite));
+        let mut button_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt((&wallpaper.folder, "favorite"))
+                .max_rect(rect),
+        );
+        let response = button_ui.add_sized(
+            rect.size(),
+            egui::Button::new("").fill(BG).selected(favorite),
+        );
         let label = format!(
-            "{} favorite: {}",
-            if favorite { "Remove" } else { "Add" },
+            "{}: {}",
+            if favorite {
+                "Favorit entfernen"
+            } else {
+                "Als Favorit speichern"
+            },
             wallpaper.title
         );
         response.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Button, true, favorite, &label)
         });
-        let center = response.rect.center();
-        let points: Vec<_> = (0..10)
-            .map(|i| {
-                let angle = std::f32::consts::TAU * i as f32 / 10.0 - std::f32::consts::FRAC_PI_2;
-                center + egui::vec2(angle.cos(), angle.sin()) * if i % 2 == 0 { 9.0 } else { 4.0 }
-            })
-            .collect();
-        let color = if favorite || response.hovered() {
-            ACCENT
-        } else {
-            TEXT
-        };
-        if favorite {
-            let mut mesh = egui::Mesh::default();
-            mesh.colored_vertex(center, color);
-            for point in &points {
-                mesh.colored_vertex(*point, color);
-            }
-            for i in 0..10 {
-                mesh.add_triangle(0, i + 1, (i + 1) % 10 + 1);
-            }
-            ui.painter().add(mesh);
-        }
-        ui.painter().add(egui::Shape::closed_line(
-            points,
-            egui::Stroke::new(1.5_f32, color),
-        ));
+        theme::paint_icon(
+            ui,
+            egui::Rect::from_center_size(response.rect.center(), egui::vec2(18.0, 18.0)),
+            Icon::Heart,
+            if favorite || response.hovered() {
+                ACCENT
+            } else {
+                TEXT
+            },
+        );
         if response.clicked() {
             self.toggle_favorite(wallpaper);
         }

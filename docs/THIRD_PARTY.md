@@ -8,6 +8,8 @@ Workshop preview HTTPS requests use `ureq` and Rustls. Source provenance and exa
 
 GUI builds embed the unmodified Noto Sans CJK Regular font collection (face 2, Noto Sans CJK SC), copyright 2014–2021 Adobe. It retains the SIL Open Font License 1.1. The original license, package provenance and SHA-256 are included in [assets/fonts](../assets/fonts/README.md). The font is part of the source archive so GUI builds do not depend on system font installation or runtime downloads.
 
+The redesigned interface also embeds IBM Plex Sans Regular/SemiBold (copyright IBM Corp., SIL Open Font License 1.1) and the Lucide icon font (ISC, with the included MIT notice for Feather-derived icons). Their licenses and file digests are in [assets/fonts](../assets/fonts/README.md); application builds and Linux packages include the license notices.
+
 The separately downloaded renderer is not part of Wallweave's source repository:
 
 - Source: https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde
@@ -18,6 +20,8 @@ The separately downloaded renderer is not part of Wallweave's source repository:
 - Upstream basis: https://github.com/Almamu/linux-wallpaperengine
 
 The installer records provenance in `runtime/v0.9.4/wallweave-install.json`. Do not upload `runtime/` as part of this app's source. The project's `.gitignore` excludes runtime and build artifacts.
+
+The optional cooperative-pause build applies `patches/renderer-cooperative-pause.patch` to upstream commit `a239861367cb8d338ef8ba346f937067c3a266d8`. This renderer modification retains GPL-3.0; Wallweave's MIT license does not relicense the engine. `scripts/build-pause-renderer.py` records the patch digest and includes the modified engine/submodule sources, patch and engine license with the local runtime. CEF and optional copied Node/V8 runtime libraries retain their original component terms. The source archive for Wallweave includes the patch and build script, not these renderer binaries.
 
 Other architectural references, not incorporated as code:
 

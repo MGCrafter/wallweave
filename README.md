@@ -116,6 +116,8 @@ wallweave shutdown                     # Stop Wallweave's wallpaper processes.
 
 [All commands, library behavior and troubleshooting →](docs/USAGE.md)
 
+App/game performance pause is available under **Einstellungen → Wiedergabe → Automatisch pausieren**: pause for a focused/fullscreen/maximized app, fullscreen/maximized only, or never (default). Hyprland checks visible workspaces per display and requires a renderer with cooperative pause control; unsupported renderers keep playing. Other desktops use the renderer integration. Playback resumes automatically. See [automatic pause](docs/USAGE.md#automatic-performance-pause) for behavior and update instructions. These changes are available in the source on `main`; the existing v0.2.4 downloads predate them.
+
 ## Build from source
 
 Install a current stable Rust toolchain, a C compiler, `pkg-config` and the Wayland/XKB/EGL development libraries. On Ubuntu/Debian:

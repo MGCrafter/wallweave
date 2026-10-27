@@ -50,6 +50,10 @@ def main() -> None:
     install(runtime, destination / "libsteam_api.so")
     install(binary, destination / "wallweave")
     shutil.copy2(project / "docs" / "THIRD_PARTY.md", destination / "THIRD_PARTY.md")
+    font_licenses = destination / "licenses" / "fonts"
+    font_licenses.mkdir(parents=True, exist_ok=True)
+    for name in ("OFL.txt", "IBM-Plex-OFL.txt", "Lucide-LICENSE.txt"):
+        shutil.copy2(project / "assets" / "fonts" / name, font_licenses / name)
     print(f"Installed Wallweave with its Steamworks runtime in {destination}")
 
 

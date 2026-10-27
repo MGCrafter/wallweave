@@ -1,5 +1,5 @@
 use crate::{
-    config::{Config, Paths},
+    config::{AutoPause, Config, Paths},
     desktop::{self, Desktop, Monitor},
     library::{self, Scan, Wallpaper},
     renderer::Renderer,
@@ -24,16 +24,21 @@ mod collection;
 use collection::{CollectionUi, Sort};
 mod properties;
 use properties::PropertiesUi;
+mod icons;
 mod playback;
+mod settings;
+mod theme;
+use settings::SettingsUi;
+use theme::Icon;
 
 // Restrained desktop chrome lets the wallpaper artwork carry the colour.
-const ACCENT: Color32 = Color32::from_rgb(115, 185, 255);
-const MUTED: Color32 = Color32::from_rgb(167, 177, 192);
-const TEXT: Color32 = Color32::from_rgb(233, 237, 243);
-const BG: Color32 = Color32::from_rgb(32, 35, 41);
-const PANEL: Color32 = Color32::from_rgb(37, 41, 48);
-const SURFACE: Color32 = Color32::from_rgb(45, 50, 59);
-const BORDER: Color32 = Color32::from_rgb(65, 73, 86);
+const ACCENT: Color32 = Color32::from_rgb(130, 185, 255);
+const MUTED: Color32 = Color32::from_rgb(164, 177, 195);
+const TEXT: Color32 = Color32::from_rgb(242, 245, 250);
+const BG: Color32 = Color32::from_rgb(20, 25, 31);
+const PANEL: Color32 = Color32::from_rgb(27, 33, 42);
+const SURFACE: Color32 = Color32::from_rgb(37, 45, 57);
+const BORDER: Color32 = Color32::from_rgb(51, 62, 77);
 const DANGER: Color32 = Color32::from_rgb(255, 138, 145);
 const DANGER_BG: Color32 = Color32::from_rgb(66, 39, 46);
 const THUMBNAIL_LIMIT: usize = 96;
@@ -102,6 +107,7 @@ enum Event {
 #[derive(Clone, Copy)]
 enum FolderKind {
     Library,
+    DraftLibrary,
     Assets,
     Renderer,
 }
@@ -149,9 +155,11 @@ pub struct App {
     property_ui: PropertiesUi,
     renderer_text: String,
     assets_text: String,
+    settings_ui: SettingsUi,
     snapshot: Option<PathBuf>,
     snapshot_wallpaper: Option<Wallpaper>,
     snapshot_requested: bool,
+    auto_pause: AutoPause,
     frames: u32,
     workshop: WorkshopUi,
 }
@@ -161,14 +169,24 @@ impl App {
         crate::fonts::configure(ctx);
         let (sender, receiver) = mpsc::channel();
         let loaded = paths.load();
-        let error = loaded.as_ref().err().map(|e| format!("{e:#}"));
+        let playback = AutoPause::load(&paths);
+        let error = loaded
+            .as_ref()
+            .err()
+            .or(playback.as_ref().err())
+            .map(|e| format!("{e:#}"));
         let config = loaded.unwrap_or_default();
         let mut style = (*ctx.style()).clone();
         style.visuals = egui::Visuals::dark();
         style.visuals.panel_fill = BG;
         style.visuals.window_fill = BG;
-        style.visuals.extreme_bg_color = Color32::from_rgb(24, 27, 32);
-        style.visuals.selection.bg_fill = Color32::from_rgb(40, 68, 97);
+        style.visuals.extreme_bg_color = Color32::from_rgb(19, 26, 35);
+        style.visuals.selection.bg_fill = theme::ACTIVE;
+        style.visuals.widgets.inactive.bg_fill = BORDER;
+        style.visuals.widgets.hovered.bg_fill = ACCENT;
+        style.visuals.widgets.active.bg_fill = ACCENT;
+        style.visuals.slider_trailing_fill = true;
+        style.spacing.slider_rail_height = 4.0;
         style.visuals.selection.stroke.color = ACCENT;
         style.visuals.override_text_color = Some(TEXT);
         style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, BORDER);
@@ -186,20 +204,21 @@ impl App {
             &mut style.visuals.widgets.active,
             &mut style.visuals.widgets.open,
         ] {
-            widget.corner_radius = egui::CornerRadius::same(4);
+            widget.corner_radius = egui::CornerRadius::same(6);
         }
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
         style.spacing.button_padding = egui::vec2(12.0, 8.0);
-        style.spacing.interact_size.y = 36.0;
+        style.spacing.interact_size.y = 22.0;
         style
             .text_styles
             .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
         style
             .text_styles
             .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Heading, egui::FontId::proportional(20.0));
+        style.text_styles.insert(
+            egui::TextStyle::Heading,
+            egui::FontId::new(23.0, egui::FontFamily::Name("heading".into())),
+        );
         style
             .text_styles
             .insert(egui::TextStyle::Small, egui::FontId::proportional(12.0));
@@ -207,6 +226,7 @@ impl App {
         let workshop = WorkshopUi::load(&paths.state);
         let collection = CollectionUi::load(&paths.state);
         let mut app = Self {
+            settings_ui: SettingsUi::new(&config, playback.as_ref().copied().unwrap_or_default()),
             renderer_text: config
                 .renderer
                 .as_ref()
@@ -230,7 +250,7 @@ impl App {
             source_filter: SourceFilter::All,
             compatibility_filter: CompatibilityFilter::All,
             collection,
-            tile_width: 182.0,
+            tile_width: 280.0,
             output: String::new(),
             display_picker: DisplayPicker::default(),
             tab: Tab::Library,
@@ -255,6 +275,7 @@ impl App {
             snapshot: None,
             snapshot_wallpaper: None,
             snapshot_requested: false,
+            auto_pause: playback.unwrap_or_default(),
             frames: 0,
             workshop,
         };
@@ -284,13 +305,13 @@ impl App {
     }
 
     fn save(&mut self) -> bool {
-        self.config.renderer = (!self.renderer_text.trim().is_empty())
-            .then(|| PathBuf::from(self.renderer_text.trim()));
-        self.config.assets =
-            (!self.assets_text.trim().is_empty()).then(|| PathBuf::from(self.assets_text.trim()));
-        match self.paths.save_preferences(&self.config) {
+        match self
+            .paths
+            .save_preferences(&self.config)
+            .and_then(|()| self.auto_pause.save(&self.paths))
+        {
             Ok(()) => {
-                self.message = "Settings saved. Offline paths will be kept.".into();
+                self.message = "Einstellungen gespeichert. Offline-Pfade bleiben erhalten.".into();
                 self.error = false;
                 true
             }
@@ -315,7 +336,7 @@ impl App {
                 FolderKind::Renderer => dialog
                     .set_title("Choose linux-wallpaperengine or its portable launcher")
                     .pick_file(),
-                FolderKind::Library => dialog
+                FolderKind::Library | FolderKind::DraftLibrary => dialog
                     .set_title("Choose your Steam library or steamapps folder")
                     .pick_folder(),
                 FolderKind::Assets => dialog
@@ -437,7 +458,7 @@ impl App {
                     self.scan_at = Instant::now();
                     if self.message == "Checking Steam libraries…" {
                         self.message = format!(
-                            "{} wallpaper(s) available. Steam downloads are checked automatically.",
+                            "{} Wallpaper verfügbar. Steam-Downloads werden automatisch geprüft.",
                             snapshot.scan.wallpapers.len()
                         );
                     }
@@ -464,6 +485,9 @@ impl App {
                         self.select_display_wallpaper(ctx);
                     }
                     self.display_picker.monitors_ready(&self.monitors);
+                    if self.snapshot.is_some() && matches!(self.tab, Tab::Setup | Tab::Workshop) {
+                        self.display_picker.dismiss();
+                    }
                     if let Some(wallpaper) = self.snapshot_wallpaper.take() {
                         self.display_picker.dismiss();
                         if !self
@@ -527,14 +551,22 @@ impl App {
                         match kind {
                             FolderKind::Library => {
                                 if !self.config.libraries.contains(&path) {
-                                    self.config.libraries.push(path);
+                                    self.config.libraries.push(path.clone());
+                                    if !self.settings_ui.draft.libraries.contains(&path) {
+                                        self.settings_ui.draft.libraries.push(path);
+                                    }
+                                }
+                                if self.save() {
+                                    self.refresh(ctx);
+                                }
+                            }
+                            FolderKind::DraftLibrary => {
+                                if !self.settings_ui.draft.libraries.contains(&path) {
+                                    self.settings_ui.draft.libraries.push(path);
                                 }
                             }
                             FolderKind::Assets => self.assets_text = path.display().to_string(),
                             FolderKind::Renderer => self.renderer_text = path.display().to_string(),
-                        }
-                        if self.save() {
-                            self.refresh(ctx);
                         }
                     }
                 }
@@ -610,46 +642,47 @@ impl App {
         let offline = self.scan.roots.iter().any(|r| !r.available);
         let pending = self.scan.downloads.iter().any(|d| d.pending());
         ui.heading(if pending {
-            "Steam is preparing your Workshop wallpapers"
+            "Steam bereitet deine Wallpaper vor"
         } else if offline {
-            "Your wallpaper library is offline"
+            "Deine Bibliothek ist nicht verbunden"
         } else {
-            "Bring your wallpapers to Linux"
+            "Deine Wallpaper. Auf deinem Desktop."
         });
         ui.add_space(10.0);
         ui.label(
             RichText::new(if pending {
-                "Wallpapers appear as soon as their download is complete."
+                "Wallpaper erscheinen, sobald ihr Download abgeschlossen ist."
             } else {
-                "Connect your drive, choose its Steam library, then rescan."
+                "Verbinde dein Laufwerk und füge deine Steam-Bibliothek hinzu."
             })
             .size(18.0),
         );
         ui.colored_label(
             MUTED,
-            "Saved paths stay in place when a disk is disconnected.",
+            "Gespeicherte Pfade bleiben erhalten, wenn ein Laufwerk nicht verbunden ist.",
         );
         ui.add_space(16.0);
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
                     !self.busy,
-                    egui::Button::new(RichText::new("Add Steam library").color(BG)).fill(ACCENT),
+                    egui::Button::new(RichText::new("Steam-Bibliothek hinzufügen").color(BG))
+                        .fill(ACCENT),
                 )
                 .clicked()
             {
                 self.choose(FolderKind::Library, ctx);
             }
-            if ui.button("Open settings").clicked() {
+            if ui.button("Einstellungen öffnen").clicked() {
                 self.tab = Tab::Setup;
             }
         });
         ui.add_space(28.0);
         ui.separator();
         ui.add_space(8.0);
-        ui.label("You can inspect the bundled web demo without the Steam drive:");
+        ui.label("Ein Demo-Wallpaper zum Ausprobieren ist bereits enthalten:");
         ui.monospace("wallweave inspect examples/web-pulse");
-        ui.colored_label(MUTED, "Rendering a real Wallpaper Engine project still requires the selected renderer and shared assets.");
+        ui.colored_label(MUTED, "Zur Wiedergabe werden der Renderer und die gemeinsamen Wallpaper-Engine-Assets benötigt.");
         for root in &self.scan.roots {
             ui.add_space(8.0);
             ui.label(root.path.display().to_string());
@@ -711,33 +744,7 @@ impl App {
     }
 
     fn filters(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.add_space(8.0);
-        ui.label(RichText::new("Your collection").strong());
-        ui.add_space(8.0);
-        for (kind, label) in [
-            ("", "All wallpapers"),
-            ("scene", "Scenes"),
-            ("video", "Videos"),
-            ("web", "Web"),
-            ("application", "Applications"),
-        ] {
-            let count = self
-                .scan
-                .wallpapers
-                .iter()
-                .filter(|w| kind.is_empty() || w.kind == kind)
-                .count();
-            if ui
-                .add_sized(
-                    [ui.available_width(), 34.0],
-                    egui::Button::new(format!("{label}   {count}"))
-                        .selected(self.kind_filter == kind),
-                )
-                .clicked()
-            {
-                self.kind_filter = kind.into();
-            }
-        }
+        ui.label(RichText::new("Deine Sammlung").small().color(MUTED));
         ui.add_space(8.0);
         let favorites = self
             .scan
@@ -745,96 +752,170 @@ impl App {
             .iter()
             .filter(|w| self.collection.is_favorite(w))
             .count();
-        if ui
-            .selectable_label(
-                self.collection.preferences.favorites_only,
-                format!("Favorites   {favorites}"),
-            )
-            .clicked()
+        if theme::nav(
+            ui,
+            Icon::LayoutGrid,
+            "Alle Wallpaper",
+            Some(self.scan.wallpapers.len()),
+            !self.collection.preferences.favorites_only && self.kind_filter.is_empty(),
+        )
+        .clicked()
         {
-            let mut preferences = self.collection.preferences.clone();
-            preferences.favorites_only = !preferences.favorites_only;
-            self.save_collection_preferences(preferences);
+            self.kind_filter.clear();
+            let mut p = self.collection.preferences.clone();
+            p.favorites_only = false;
+            self.save_collection_preferences(p);
         }
-        ui.add_space(16.0);
-        ui.label(RichText::new("Source").strong());
-        for (filter, label) in [
-            (SourceFilter::All, "All sources"),
-            (SourceFilter::Workshop, "Steam Workshop"),
-            (SourceFilter::Included, "Included / local"),
+        if theme::nav(
+            ui,
+            Icon::Heart,
+            "Favoriten",
+            Some(favorites),
+            self.collection.preferences.favorites_only,
+        )
+        .clicked()
+        {
+            let mut p = self.collection.preferences.clone();
+            p.favorites_only = !p.favorites_only;
+            self.save_collection_preferences(p);
+        }
+        if theme::nav(
+            ui,
+            Icon::Clock3,
+            "Zuletzt hinzugefügt",
+            None,
+            self.collection.preferences.sort == Sort::SubscribedNewest,
+        )
+        .clicked()
+        {
+            let mut p = self.collection.preferences.clone();
+            p.sort = Sort::SubscribedNewest;
+            self.save_collection_preferences(p);
+            if !self.collection.attempted {
+                self.sync_subscription_dates();
+            }
+        }
+        ui.add_space(22.0);
+        ui.label(RichText::new("Wallpaper-Typ").small().color(MUTED));
+        for (kind, label, icon) in [
+            ("scene", "Szenen", Icon::Sparkles),
+            ("video", "Videos", Icon::Film),
+            ("web", "Web", Icon::Globe),
+            ("application", "Anwendungen", Icon::PanelsTopLeft),
         ] {
-            ui.selectable_value(&mut self.source_filter, filter, label);
+            let count = self
+                .scan
+                .wallpapers
+                .iter()
+                .filter(|w| w.kind == kind)
+                .count();
+            if kind == "application" && count == 0 {
+                continue;
+            }
+            if theme::nav(ui, icon, label, Some(count), self.kind_filter == kind).clicked() {
+                self.kind_filter = if self.kind_filter == kind {
+                    String::new()
+                } else {
+                    kind.into()
+                };
+            }
         }
+        ui.add_space(22.0);
+        ui.label(RichText::new("Quelle").small().color(MUTED));
+        for (source, label) in [
+            (SourceFilter::All, "Alle Quellen"),
+            (SourceFilter::Workshop, "Steam Workshop"),
+            (SourceFilter::Included, "Lokal & mitgeliefert"),
+        ] {
+            ui.selectable_value(&mut self.source_filter, source, label);
+        }
+        ui.add_space(22.0);
+        ui.label(RichText::new("Kompatibilität").small().color(MUTED));
+        let label = match self.compatibility_filter {
+            CompatibilityFilter::All => "Alle anzeigen",
+            CompatibilityFilter::NoKnownIssue => "Kein bekannter Fehler",
+            CompatibilityFilter::Incompatible => "Nicht kompatibel",
+        };
+        egui::ComboBox::from_id_salt("compatibility")
+            .width(ui.available_width())
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                for (value, label) in [
+                    (CompatibilityFilter::All, "Alle anzeigen"),
+                    (CompatibilityFilter::NoKnownIssue, "Kein bekannter Fehler"),
+                    (CompatibilityFilter::Incompatible, "Nicht kompatibel"),
+                ] {
+                    ui.selectable_value(&mut self.compatibility_filter, value, label);
+                }
+            });
         ui.add_space(16.0);
-        ui.label(RichText::new("Compatibility").strong());
-        ui.selectable_value(
-            &mut self.compatibility_filter,
-            CompatibilityFilter::All,
-            "Show all",
-        );
-        ui.selectable_value(
-            &mut self.compatibility_filter,
-            CompatibilityFilter::NoKnownIssue,
-            "No known issue",
-        );
-        let blocked = self
-            .scan
-            .wallpapers
-            .iter()
-            .filter(|w| self.blocked(w).is_some())
-            .count();
-        ui.selectable_value(
-            &mut self.compatibility_filter,
-            CompatibilityFilter::Incompatible,
-            RichText::new(format!("Incompatible   {blocked}")).color(DANGER),
-        );
-        ui.add_space(8.0);
         ui.label(
-            RichText::new(
-                "Unmarked wallpapers have no known blocker; compatibility may still vary.",
-            )
-            .small()
-            .color(MUTED),
+            RichText::new("Die Unterstützung kann je nach Wallpaper und Renderer variieren.")
+                .small()
+                .color(MUTED),
         );
-        ui.add_space(16.0);
-        ui.separator();
-        ui.add_space(8.0);
-        if ui
-            .add_enabled(
-                !self.busy,
-                egui::Button::new("Add library…").min_size(egui::vec2(ui.available_width(), 34.0)),
-            )
-            .clicked()
-        {
-            self.choose(FolderKind::Library, ctx);
-        }
-        if ui
-            .add_enabled(
-                !self.scanning,
-                egui::Button::new("Rescan").min_size(egui::vec2(ui.available_width(), 34.0)),
-            )
-            .clicked()
-        {
-            self.refresh(ctx);
-        }
+        ui.add_space((ui.available_height() - 174.0).clamp(24.0, 100.0));
+        theme::section().inner_margin(12.0).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            theme::icon(ui, Icon::FolderOpen, 20.0, ACCENT);
+            ui.label(theme::heading(
+                "Deine Wallpaper.\nAuf deinem Desktop.",
+                14.0,
+            ));
+            ui.label(
+                RichText::new(format!(
+                    "{} Wallpaper verfügbar",
+                    self.scan.wallpapers.len()
+                ))
+                .small()
+                .color(MUTED),
+            );
+        });
+        ui.add_space(10.0);
+        ui.add_enabled_ui(!self.busy, |ui| {
+            if theme::wide_button(ui, Icon::FolderPlus, "Ordner hinzufügen", false).clicked() {
+                self.choose(FolderKind::Library, ctx);
+            }
+        });
     }
 
     fn library(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let content_width = ui.available_width();
+        let compact = content_width < 520.0;
         ui.horizontal(|ui| {
-            ui.heading("Installed wallpapers");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.colored_label(MUTED, format!("{} wallpapers", self.scan.wallpapers.len()));
+            let title_width = content_width - if compact { 56.0 } else { 146.0 };
+            ui.allocate_ui_with_layout(
+                egui::vec2(title_width, 36.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(title_width);
+                    ui.add(egui::Label::new(theme::heading("Deine Bibliothek", 28.0)).truncate());
+                },
+            );
+            ui.add_enabled_ui(!self.scanning, |ui| {
+                if theme::button(
+                    ui,
+                    Icon::RefreshCw,
+                    if compact { "" } else { "Aktualisieren" },
+                    false,
+                )
+                .on_hover_text("Bibliothek aktualisieren")
+                .clicked()
+                {
+                    self.refresh(ctx);
+                }
             });
         });
-        self.current_wallpaper_banner(ui, ctx);
+        ui.label(RichText::new("Ein neuer Blick auf deinen Desktop.").color(MUTED));
+        ui.add_space(14.0);
         let pending: Vec<_> = self.scan.downloads.iter().filter(|d| d.pending()).collect();
         if !pending.is_empty() {
             let downloaded: usize = pending.iter().map(|d| d.downloaded).sum();
             let total: usize = pending.iter().map(|d| d.total).sum();
-            ui.horizontal(|ui| {
-                ui.colored_label(ACCENT, format!("Steam downloads   {downloaded} / {total}"));
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(ACCENT, format!("Steam-Downloads   {downloaded} / {total}"));
                 ui.label(
-                    RichText::new("Finished items are ready to use.")
+                    RichText::new("Fertige Wallpaper sind sofort verfügbar.")
                         .small()
                         .color(MUTED),
                 );
@@ -852,13 +933,13 @@ impl App {
                 ui.colored_label(
                     DANGER,
                     format!(
-                        "{missing} previously downloaded files are missing from Steam's folders."
+                        "{missing} zuvor heruntergeladene Dateien fehlen in den Steam-Ordnern."
                     ),
                 );
                 if ui
                     .add_enabled(
                         active == 0 && !self.workshop.connecting,
-                        egui::Button::new("Restore missing downloads"),
+                        egui::Button::new("Fehlende Downloads wiederherstellen"),
                     )
                     .clicked()
                 {
@@ -872,10 +953,10 @@ impl App {
                 ui.colored_label(
                     ACCENT,
                     format!(
-                        "{active} downloads queued · completed wallpapers appear automatically"
+                        "{active} Downloads vorgemerkt · fertige Wallpaper erscheinen automatisch"
                     ),
                 );
-                if ui.button("View download queue").clicked() {
+                if ui.button("Downloads anzeigen").clicked() {
                     self.tab = Tab::Workshop;
                 }
             });
@@ -886,19 +967,21 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
-            ui.label("Search");
+            theme::icon(ui, Icon::Search, 18.0, MUTED);
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .hint_text("Title or Workshop ID")
+                    .hint_text("Wallpaper suchen …")
                     .desired_width(ui.available_width()),
             );
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label("Sort");
+            if !compact {
+                ui.label(RichText::new("Sortierung").small().color(MUTED));
+            }
             let mut sort = self.collection.preferences.sort;
             egui::ComboBox::from_id_salt("sort")
                 .selected_text(sort.label())
-                .width(194.0)
+                .width(if compact { 160.0 } else { 194.0 })
                 .show_ui(ui, |ui| {
                     for &(value, label) in Sort::OPTIONS {
                         ui.selectable_value(&mut sort, value, label);
@@ -913,16 +996,19 @@ impl App {
                 }
             }
             ui.add_space(8.0);
-            ui.label("Size");
-            ui.spacing_mut().slider_width = 90.0;
-            ui.add(egui::Slider::new(&mut self.tile_width, 150.0..=250.0).show_value(false));
+            theme::icon(ui, Icon::Grid2X2, 16.0, MUTED);
+            ui.spacing_mut().slider_width = if compact { 64.0 } else { 90.0 };
+            theme::slider(
+                ui,
+                egui::Slider::new(&mut self.tile_width, 180.0..=380.0).show_value(false),
+            );
         });
         if self.collection.preferences.sort.uses_subscription_date() {
             ui.horizontal_wrapped(|ui| {
                 if self.collection.syncing {
                     ui.spinner();
                     ui.colored_label(MUTED, &self.collection.message);
-                } else if ui.button("Sync Steam dates").clicked() {
+                } else if ui.button("Steam-Daten abgleichen").clicked() {
                     self.sync_subscription_dates();
                 }
                 let workshop = self
@@ -938,11 +1024,9 @@ impl App {
                     .filter(|w| self.collection.subscribed_at(w).is_some())
                     .count();
                 ui.label(
-                    RichText::new(format!(
-                        "{dated}/{workshop} with a date · undated items last"
-                    ))
-                    .small()
-                    .color(MUTED),
+                    RichText::new(format!("{dated}/{workshop} mit Datum"))
+                        .small()
+                        .color(MUTED),
                 );
             });
         }
@@ -950,13 +1034,27 @@ impl App {
             ui.colored_label(DANGER, &self.collection.message);
         }
         ui.add_space(6.0);
+        ui.set_width(content_width);
+        self.current_wallpaper_banner(ui, ctx);
+        if ui.available_height() > 420.0 && !self.monitors.is_empty() {
+            egui::TopBottomPanel::bottom("display_assignments")
+                .frame(
+                    egui::Frame::new()
+                        .fill(BG)
+                        .inner_margin(egui::Margin::symmetric(0, 10)),
+                )
+                .show_inside(ui, |ui| self.display_overview(ui, ctx));
+        }
         let reveal = self.reveal_wallpaper.take();
         let items = self.filtered();
         if items.is_empty() {
             ui.add_space(30.0);
-            ui.heading("No matching wallpapers");
-            ui.colored_label(MUTED, "Try a different search or reset the filters.");
-            if ui.button("Reset filters").clicked() {
+            ui.heading("Keine passenden Wallpaper");
+            ui.colored_label(
+                MUTED,
+                "Versuche andere Suchbegriffe oder setze die Filter zurück.",
+            );
+            if ui.button("Filter zurücksetzen").clicked() {
                 self.search.clear();
                 self.kind_filter.clear();
                 self.source_filter = SourceFilter::All;
@@ -971,11 +1069,11 @@ impl App {
             let wallpaper = self.scan.wallpapers[items[0]].clone();
             self.select(&wallpaper, ctx);
         }
-        let gap = 10.0;
-        let width = ui.available_width() - 10.0; // Leave room for the scrollbar.
+        let gap = 16.0;
+        let width = content_width - 10.0; // Leave room for the scrollbar.
         let columns = ((width + gap) / (self.tile_width + gap)).floor().max(1.0) as usize;
         let tile_width = (width - gap * (columns - 1) as f32) / columns as f32;
-        let tile_height = tile_width * 0.625 + 70.0;
+        let tile_height = tile_width * 0.5625 + 78.0;
         let rows = items.len().div_ceil(columns);
         ui.spacing_mut().item_spacing.y = gap;
         let mut scroll = egui::ScrollArea::vertical()
@@ -1027,11 +1125,18 @@ impl App {
         let assignment_text = if outputs.is_empty() {
             String::new()
         } else {
-            format!("Set on {}", outputs.join(", "))
+            format!("Auf {} eingerichtet", outputs.join(", "))
         };
         let response = ui
             .push_id(&wallpaper.folder, |ui| {
-                ui.add_sized(size, egui::Button::new("").selected(selected).fill(SURFACE))
+                ui.add_sized(
+                    size,
+                    egui::Button::new("").selected(selected).fill(if selected {
+                        theme::ACTIVE
+                    } else {
+                        PANEL
+                    }),
+                )
             })
             .inner;
         response.widget_info(|| {
@@ -1055,7 +1160,7 @@ impl App {
         let rect = response.rect;
         let image_rect = egui::Rect::from_min_size(
             rect.min + egui::vec2(3.0, 3.0),
-            egui::vec2(size.x - 6.0, size.x * 0.625 - 3.0),
+            egui::vec2(size.x - 6.0, size.x * 0.5625 - 3.0),
         );
         if ui.is_rect_visible(rect) {
             if let Some(path) = &wallpaper.preview {
@@ -1064,22 +1169,22 @@ impl App {
             self.paint_preview(ui, wallpaper, image_rect, true);
             let mut job = egui::text::LayoutJob::simple(
                 wallpaper.title.clone(),
-                egui::FontId::proportional(14.0),
+                egui::FontId::new(15.0, egui::FontFamily::Name("heading".into())),
                 TEXT,
-                size.x - 16.0,
+                size.x - 24.0,
             );
             job.wrap.max_rows = 2;
             let galley = ui.fonts(|fonts| fonts.layout_job(job));
             ui.painter().galley(
-                egui::pos2(rect.left() + 8.0, image_rect.bottom() + 7.0),
+                egui::pos2(rect.left() + 12.0, image_rect.bottom() + 10.0),
                 galley,
                 TEXT,
             );
             let mut metadata = egui::text::LayoutJob::simple(
                 if outputs.is_empty() {
-                    wallpaper.kind.clone()
+                    theme::kind(&wallpaper.kind).to_owned()
                 } else {
-                    format!("{} · {assignment_text}", wallpaper.kind)
+                    format!("{} · {assignment_text}", theme::kind(&wallpaper.kind))
                 },
                 egui::FontId::proportional(12.0),
                 MUTED,
@@ -1088,7 +1193,7 @@ impl App {
             metadata.wrap.max_rows = 1;
             let galley = ui.fonts(|fonts| fonts.layout_job(metadata));
             ui.painter().galley(
-                egui::pos2(rect.left() + 8.0, rect.bottom() - 22.0),
+                egui::pos2(rect.left() + 12.0, rect.bottom() - 20.0),
                 galley,
                 MUTED,
             );
@@ -1097,9 +1202,9 @@ impl App {
                 .filter(|current| wallpaper.matches_folder(&current.folder))
             {
                 let label = if current.state == "Saved · not running" {
-                    format!("Saved for {}", self.output)
+                    format!("Gespeichert für {}", self.output)
                 } else {
-                    format!("{} on {}", current.state, self.output)
+                    format!("{} · {}", theme::playback(current.state), self.output)
                 };
                 let mut job = egui::text::LayoutJob::simple(
                     label,
@@ -1124,9 +1229,9 @@ impl App {
                     .galley(badge_rect.min + egui::vec2(6.0, 4.0), galley, TEXT);
             }
             let badge = if blocked.is_some() {
-                Some(("Incompatible", DANGER, DANGER_BG))
+                Some(("Nicht kompatibel", DANGER, DANGER_BG))
             } else if wallpaper.staged {
-                Some(("Ready download", ACCENT, Color32::from_rgb(32, 49, 68)))
+                Some(("Download bereit", ACCENT, Color32::from_rgb(32, 49, 68)))
             } else {
                 None
             };
@@ -1154,17 +1259,13 @@ impl App {
                 egui::Stroke::new(1.0_f32, BORDER)
             };
             ui.painter()
-                .rect_stroke(rect, 4.0, stroke, egui::StrokeKind::Inside);
+                .rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Inside);
         }
         let favorite_rect = egui::Rect::from_min_size(
             image_rect.right_top() + egui::vec2(-36.0, 6.0),
             egui::vec2(30.0, 30.0),
         );
-        let favorite = ui
-            .push_id((&wallpaper.folder, "favorite"), |ui| {
-                self.favorite_button(ui, wallpaper, favorite_rect)
-            })
-            .inner;
+        let favorite = self.favorite_button(ui, wallpaper, favorite_rect);
         if response.clicked() && !favorite.clicked() {
             self.select(wallpaper, ctx);
             if response.double_clicked() {
@@ -1175,9 +1276,9 @@ impl App {
             "{}\n{}\n{}",
             wallpaper.title,
             blocked.unwrap_or(if wallpaper.staged {
-                "Download complete; ready to apply."
+                "Download abgeschlossen · bereit zum Anwenden."
             } else {
-                "Click to customize. Double-click to apply to the selected display."
+                "Anklicken zum Anpassen. Doppelklick zum Anwenden auf den gewählten Bildschirm."
             }),
             assignment_text,
         ));
@@ -1185,33 +1286,14 @@ impl App {
 
     fn paint_preview(&self, ui: &egui::Ui, wallpaper: &Wallpaper, rect: egui::Rect, crop: bool) {
         ui.painter()
-            .rect_filled(rect, 2.0, Color32::from_rgb(24, 27, 32));
+            .rect_filled(rect, 2.0, Color32::from_rgb(19, 26, 35));
         if let Some(texture) = wallpaper
             .preview
             .as_ref()
             .and_then(|p| self.textures.get(p))
             .and_then(Option::as_ref)
         {
-            let image_size = texture.size_vec2();
-            let image_ratio = image_size.x / image_size.y;
-            let target_ratio = rect.width() / rect.height();
-            let mut uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-            let mut target = rect;
-            if crop {
-                if image_ratio > target_ratio {
-                    let fraction = target_ratio / image_ratio;
-                    uv.min.x = (1.0 - fraction) / 2.0;
-                    uv.max.x = 1.0 - uv.min.x;
-                } else {
-                    let fraction = image_ratio / target_ratio;
-                    uv.min.y = (1.0 - fraction) / 2.0;
-                    uv.max.y = 1.0 - uv.min.y;
-                }
-            } else {
-                let scale = (rect.width() / image_size.x).min(rect.height() / image_size.y);
-                target = egui::Rect::from_center_size(rect.center(), image_size * scale);
-            }
-            ui.painter().image(texture.id(), target, uv, Color32::WHITE);
+            theme::image(ui, texture, rect, crop);
         } else {
             ui.painter().text(
                 rect.center(),
@@ -1221,9 +1303,9 @@ impl App {
                     .as_ref()
                     .is_some_and(|p| self.thumbnail_pending.contains(p))
                 {
-                    "Loading preview…"
+                    "Vorschau wird geladen …"
                 } else {
-                    "No preview"
+                    "Keine Vorschau"
                 },
                 egui::FontId::proportional(13.0),
                 MUTED,
@@ -1249,20 +1331,28 @@ impl App {
                 }
                 let width = ui.available_width();
                 let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(width, (width * 0.48).min(156.0)),
+                    egui::vec2(width, (width * 0.5625).min(220.0)),
                     egui::Sense::hover(),
                 );
                 self.paint_preview(ui, wallpaper, rect, true);
                 ui.add_space(8.0);
-                ui.label(RichText::new(&wallpaper.title).size(18.0).strong());
+                ui.label(theme::heading(&wallpaper.title, 23.0));
                 ui.label(
-                    RichText::new(format!("{} wallpaper", wallpaper.kind))
-                        .small()
-                        .color(MUTED),
+                    RichText::new(format!(
+                        "{} · {}",
+                        theme::kind(&wallpaper.kind),
+                        if wallpaper.workshop_id().is_some() {
+                            "Steam Workshop"
+                        } else {
+                            "Lokal"
+                        }
+                    ))
+                    .small()
+                    .color(MUTED),
                 );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.property_ui.details, false, "Customize");
+                    ui.selectable_value(&mut self.property_ui.details, false, "Anpassen");
                     ui.selectable_value(&mut self.property_ui.details, true, "Details");
                 });
                 ui.separator();
@@ -1271,33 +1361,35 @@ impl App {
                     let favorite = self.collection.is_favorite(wallpaper);
                     if ui
                         .button(if favorite {
-                            "Remove favorite"
+                            "Favorit entfernen"
                         } else {
-                            "Add favorite"
+                            "Als Favorit speichern"
                         })
                         .clicked()
                     {
                         self.toggle_favorite(wallpaper);
                     }
                     if let Some(reason) = self.blocked(wallpaper) {
-                        ui.colored_label(DANGER, "Incompatible");
+                        ui.colored_label(DANGER, "Nicht kompatibel");
                         ui.label(reason);
                     }
                     ui.label(wallpaper.script_description());
                     if wallpaper.staged {
-                        ui.colored_label(ACCENT, "Download complete · ready to apply");
+                        ui.colored_label(ACCENT, "Download abgeschlossen · bereit zum Anwenden");
                     }
-                    ui.label(RichText::new("Project location").strong());
+                    ui.label(RichText::new("Projektordner").strong());
                     ui.label(wallpaper.folder.display().to_string());
                     ui.label(
-                        RichText::new(format!("Project ID: {}", wallpaper.id))
+                        RichText::new(format!("Projekt-ID: {}", wallpaper.id))
                             .small()
                             .color(MUTED),
                     );
-                    ui.collapsing("Enter display connector manually", |ui| {
-                        let label = ui.label("Display connector");
-                        ui.add(egui::TextEdit::singleline(&mut self.output).hint_text("e.g. DP-1"))
-                            .labelled_by(label.id);
+                    ui.collapsing("Bildschirmanschluss manuell eingeben", |ui| {
+                        let label = ui.label("Bildschirmanschluss");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.output).hint_text("z. B. DP-1"),
+                        )
+                        .labelled_by(label.id);
                     });
                 } else {
                     self.property_ui
@@ -1338,12 +1430,12 @@ impl App {
     fn wallpaper_actions(&mut self, ui: &mut egui::Ui, wallpaper: &Wallpaper, ctx: &egui::Context) {
         let blocked = self.blocked(wallpaper);
         let playable = blocked.is_none() && self.scan.assets.is_some() && self.engine.is_ok();
-        let label = ui.label(RichText::new("Apply to display").small().color(MUTED));
+        let label = ui.label(RichText::new("Anwenden auf").small().color(MUTED));
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("output")
                 .width((ui.available_width() - 100.0).max(80.0))
                 .selected_text(if self.output.is_empty() {
-                    "Choose a display"
+                    "Bildschirm auswählen"
                 } else {
                     &self.output
                 })
@@ -1358,7 +1450,7 @@ impl App {
                 })
                 .response
                 .labelled_by(label.id);
-            if ui.button("Choose…").clicked() {
+            if ui.button("Wählen …").clicked() {
                 self.display_picker.open();
             }
         });
@@ -1367,9 +1459,9 @@ impl App {
                 playable && !self.busy && !self.output.is_empty(),
                 egui::Button::new(
                     RichText::new(if self.output.is_empty() {
-                        "Choose a display".into()
+                        "Bildschirm auswählen".into()
                     } else {
-                        format!("Apply to {}", self.output)
+                        format!("Auf {} anwenden", self.output)
                     })
                     .strong()
                     .color(BG),
@@ -1384,7 +1476,7 @@ impl App {
         if ui
             .add_enabled(
                 playable && !self.busy,
-                egui::Button::new("Open window preview")
+                egui::Button::new("Fenstervorschau öffnen")
                     .min_size(egui::vec2(ui.available_width(), 30.0)),
             )
             .clicked()
@@ -1395,7 +1487,7 @@ impl App {
             ui.label(RichText::new(reason).small().color(DANGER));
         } else if !playable {
             ui.label(
-                RichText::new("Check the renderer and assets in Settings to enable playback.")
+                RichText::new("Prüfe Renderer und Assets in den Einstellungen, um die Wiedergabe zu aktivieren.")
                     .small()
                     .color(MUTED),
             );
@@ -1411,7 +1503,7 @@ impl App {
             ui.label(
                 RichText::new(format!(
                     "{}: {}",
-                    if state.paused { "Paused" } else { "Playing" },
+                    theme::playback(state.playback_label()),
                     state.title
                 ))
                 .small()
@@ -1420,9 +1512,11 @@ impl App {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !self.busy,
-                        egui::Button::new(if state.paused { "Resume" } else { "Pause" }).small(),
+                        !self.busy && (state.pause_supported || state.paused),
+                        egui::Button::new(if state.paused { "Fortsetzen" } else { "Pause" })
+                            .small(),
                     )
+                    .on_disabled_hover_text("Dieser Renderer unterstützt noch keine sichere Pause.")
                     .clicked()
                 {
                     self.action(
@@ -1440,7 +1534,7 @@ impl App {
                     );
                 }
                 if ui
-                    .add_enabled(!self.busy, egui::Button::new("Stop").small())
+                    .add_enabled(!self.busy, egui::Button::new("Stoppen").small())
                     .clicked()
                 {
                     self.action(
@@ -1453,112 +1547,6 @@ impl App {
                 }
             });
         }
-    }
-
-    fn setup(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Settings");
-        ui.label("Your files stay in their existing library. Nothing is moved or imported.");
-        ui.add_space(16.0);
-        ui.label(RichText::new("Steam libraries").strong());
-        let mut remove = None;
-        for (index, path) in self.config.libraries.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.monospace(path.display().to_string());
-                if ui.small_button("Remove").clicked() {
-                    remove = Some(index);
-                }
-            });
-            if !path.is_dir() {
-                ui.colored_label(
-                    MUTED,
-                    "Currently unavailable — reconnect the drive when you are ready.",
-                );
-            }
-        }
-        if let Some(index) = remove {
-            self.config.libraries.remove(index);
-        }
-        if ui
-            .add_enabled(!self.busy, egui::Button::new("Add Steam library…"))
-            .clicked()
-        {
-            self.choose(FolderKind::Library, ctx);
-        }
-        ui.add_space(14.0);
-        ui.label("Wallpaper Engine assets folder");
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.assets_text)
-                    .hint_text("Automatic discovery from Steam libraries")
-                    .desired_width(ui.available_width() - 100.0),
-            );
-            if ui.button("Browse…").clicked() {
-                self.choose(FolderKind::Assets, ctx);
-            }
-        });
-        if let Some(path) = &self.scan.assets {
-            ui.colored_label(MUTED, format!("Available: {}", path.display()));
-        }
-        ui.add_space(14.0);
-        ui.label("Renderer executable");
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.renderer_text)
-                    .hint_text("Bundled portable renderer, then linux-wallpaperengine in PATH")
-                    .desired_width(ui.available_width() - 100.0),
-            );
-            if ui.button("Browse…").clicked() {
-                self.choose(FolderKind::Renderer, ctx);
-            }
-        });
-        match &self.engine {
-            Ok(engine) => {
-                ui.colored_label(MUTED, engine.executable.display().to_string());
-                ui.label(if engine.web_frame_transfer { "Extended renderer flags detected; actual wallpaper compatibility still needs testing." } else { "Basic renderer detected. For the V8 fork, use the portable renderer installer supplied with this project." });
-            }
-            Err(error) => {
-                ui.colored_label(DANGER, error);
-            }
-        }
-        ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.label("FPS limit");
-            ui.add(egui::Slider::new(&mut self.config.fps, 1..=120));
-            ui.label("Volume");
-            ui.add(egui::Slider::new(&mut self.config.volume, 0..=100));
-        });
-        egui::ComboBox::from_label("Scaling")
-            .selected_text(&self.config.scaling)
-            .show_ui(ui, |ui| {
-                for option in ["fill", "fit", "stretch", "default"] {
-                    ui.selectable_value(&mut self.config.scaling, option.into(), option);
-                }
-            });
-        ui.add_space(12.0);
-        if ui
-            .add_enabled(
-                !self.busy,
-                egui::Button::new(RichText::new("Save settings and rescan").color(BG)).fill(ACCENT),
-            )
-            .clicked()
-            && self.save()
-        {
-            self.refresh(ctx);
-        }
-        ui.add_space(22.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(format!(
-                "{} · {}",
-                self.desktop.name, self.desktop.integration
-            ))
-            .strong(),
-        );
-        ui.label(&self.desktop.note);
-        ui.colored_label(MUTED, "Hyprland monitor names are detected automatically. Other desktops can use manual connector names. Their runtime integrations still need desktop-specific testing.");
-        ui.add_space(8.0);
-        ui.monospace(self.paths.config.display().to_string());
     }
 
     fn activity(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1574,18 +1562,21 @@ impl App {
                 ui.label(RichText::new(format!("{} · {}", state.output, state.title)).strong());
                 ui.colored_label(
                     MUTED,
-                    if state.paused {
-                        "Paused"
-                    } else {
-                        "Renderer process running — visual compatibility is not verified"
-                    },
+                    state.playback_label(),
                 );
+                if let Some(mode) = state.auto_pause {
+                    ui.label(format!("Automatic pause: {}", mode.label()));
+                    if mode != AutoPause::Off && state.auto_paused.is_none() {
+                        ui.colored_label(MUTED, "The renderer pauses and resumes automatically; its current automatic pause state is not reported here.");
+                    }
+                }
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(
-                            !self.busy,
-                            egui::Button::new(if state.paused { "Resume" } else { "Pause" }),
+                            !self.busy && (state.pause_supported || state.paused),
+                            egui::Button::new(if state.paused { "Fortsetzen" } else { "Pause" }),
                         )
+                        .on_disabled_hover_text("Dieser Renderer unterstützt noch keine sichere Pause.")
                         .clicked()
                     {
                         self.action(
@@ -1603,7 +1594,7 @@ impl App {
                         );
                     }
                     if ui
-                        .add_enabled(!self.busy, egui::Button::new("Stop"))
+                        .add_enabled(!self.busy, egui::Button::new("Stoppen"))
                         .clicked()
                     {
                         self.action(
@@ -1615,7 +1606,7 @@ impl App {
                         );
                     }
                 });
-                ui.collapsing("Renderer log", |ui| {
+                ui.collapsing("Renderer-Protokoll", |ui| {
                     ui.monospace(service::tail(&state.log, 5000));
                     ui.monospace(state.log.display().to_string());
                 });
@@ -1624,7 +1615,7 @@ impl App {
         if ui
             .add_enabled(
                 !self.busy && !self.status.states.is_empty(),
-                egui::Button::new("Stop all Wallweave wallpapers"),
+                egui::Button::new("Alle Wallpaper stoppen"),
             )
             .clicked()
         {
@@ -1641,29 +1632,35 @@ impl App {
 
     fn draw(&mut self, ctx: &egui::Context) {
         let previous_output = self.output.clone();
+        let compact = ctx.screen_rect().width() < 1200.0;
         egui::TopBottomPanel::top("navigation")
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
-                    .inner_margin(egui::Margin::symmetric(18, 10)),
+                    .inner_margin(egui::Margin::symmetric(24, 8)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("wallweave").size(23.0).strong());
-                    ui.add_space(22.0);
-                    for (tab, text) in [
-                        (Tab::Library, "Installed"),
-                        (Tab::Workshop, "Workshop"),
-                        (Tab::Setup, "Settings"),
-                        (Tab::Activity, "Activity"),
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(if compact { 160.0 } else { 184.0 }, 54.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            theme::icon(ui, Icon::Layers, 28.0, ACCENT);
+                            ui.label(theme::heading("wallweave", 24.0));
+                        },
+                    );
+                    for (tab, icon, label) in [
+                        (Tab::Library, Icon::PanelsTopLeft, "Bibliothek"),
+                        (Tab::Workshop, Icon::Compass, "Workshop"),
+                        (Tab::Setup, Icon::Settings2, "Einstellungen"),
                     ] {
-                        if ui
-                            .add(
-                                egui::Button::new(text)
-                                    .selected(self.tab == tab)
-                                    .min_size(egui::vec2(84.0, 34.0)),
-                            )
-                            .clicked()
+                        if theme::tab(
+                            ui,
+                            icon,
+                            label,
+                            self.tab == tab || tab == Tab::Setup && self.tab == Tab::Activity,
+                        )
+                        .clicked()
                         {
                             self.tab = tab;
                             if self.tab == Tab::Workshop {
@@ -1672,24 +1669,27 @@ impl App {
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(format!(
-                                "Display: {}",
-                                if self.output.is_empty() {
-                                    "Choose…"
-                                } else {
-                                    &self.output
-                                }
-                            ))
+                        if theme::button(ui, Icon::Monitor, "Bildschirme", false)
+                            .on_hover_text(format!("Zielbildschirm: {}", self.output))
                             .clicked()
                         {
                             self.display_picker.open();
                         }
-                        ui.label(
-                            RichText::new(format!("{} active", self.status.states.len()))
-                                .color(ACCENT),
-                        );
-                        ui.colored_label(MUTED, &self.desktop.name);
+                        if !compact {
+                            theme::status(
+                                ui,
+                                if self.workshop.connected {
+                                    "Steam verbunden"
+                                } else {
+                                    "Steam nicht verbunden"
+                                },
+                                if self.workshop.connected {
+                                    theme::SUCCESS
+                                } else {
+                                    MUTED
+                                },
+                            );
+                        }
                     });
                 });
             });
@@ -1697,14 +1697,27 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
-                    .inner_margin(egui::Margin::symmetric(16, 8)),
+                    .inner_margin(egui::Margin::symmetric(16, 7)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if self.busy || self.scanning {
                         ui.spinner();
                     }
-                    ui.add(
+                    let active = self
+                        .status
+                        .states
+                        .iter()
+                        .filter(|s| s.output != "preview")
+                        .count();
+                    if !compact && !self.error {
+                        theme::status(ui, &format!("{active} Bildschirme aktiv"), theme::SUCCESS);
+                        ui.colored_label(MUTED, &self.desktop.name);
+                        ui.add_space(14.0);
+                    }
+                    let width = (ui.available_width() - 50.0).max(40.0);
+                    ui.add_sized(
+                        [width, 20.0],
                         egui::Label::new(
                             RichText::new(&self.message).small().color(if self.error {
                                 DANGER
@@ -1715,72 +1728,140 @@ impl App {
                         .truncate(),
                     )
                     .on_hover_text(&self.message);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(env!("CARGO_PKG_VERSION"))
-                                .small()
-                                .color(MUTED),
-                        );
-                    });
+                    ui.label(
+                        RichText::new(env!("CARGO_PKG_VERSION"))
+                            .small()
+                            .color(MUTED),
+                    );
                 });
             });
-        if self.tab == Tab::Library {
-            egui::SidePanel::left("filters")
-                .exact_width(176.0)
-                .resizable(false)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(12.0))
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.filters(ui, ctx));
-                });
-            egui::SidePanel::right("inspector").default_width(364.0).width_range(320.0..=480.0)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(14.0)).show(ctx, |ui| {
-                    if let Some(wallpaper) = self.selected() { self.detail(ui, &wallpaper, ctx); }
-                    else {
-                        ui.add_space(20.0);
-                        ui.heading("Choose a wallpaper");
-                        ui.colored_label(MUTED, "Select a thumbnail to customize its settings and apply it to your display.");
-                    }
-                });
-        } else if self.tab == Tab::Workshop {
-            egui::SidePanel::left("workshop_filters")
-                .exact_width(176.0)
-                .resizable(false)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(12.0))
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.workshop_filters(ui));
-                });
-            egui::SidePanel::right("workshop_inspector")
-                .default_width(316.0)
-                .width_range(288.0..=420.0)
-                .frame(egui::Frame::new().fill(PANEL).inner_margin(14.0))
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("workshop_detail")
-                        .show(ui, |ui| self.workshop_detail(ui, ctx));
-                });
+        let side_width = if compact { 190.0 } else { 220.0 };
+        match self.tab {
+            Tab::Library => {
+                egui::SidePanel::left("filters")
+                    .exact_width(side_width)
+                    .resizable(false)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(PANEL)
+                            .inner_margin(egui::Margin::symmetric(16, 24)),
+                    )
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("library_filters_scroll")
+                            .show(ui, |ui| self.filters(ui, ctx));
+                    });
+                egui::SidePanel::right("inspector")
+                    .default_width(368.0)
+                    .width_range(320.0..=480.0)
+                    .frame(egui::Frame::new().fill(PANEL).inner_margin(24.0))
+                    .show(ctx, |ui| {
+                        if let Some(wallpaper) = self.selected() {
+                            self.detail(ui, &wallpaper, ctx);
+                        } else {
+                            ui.heading("Wähle ein Wallpaper");
+                            ui.colored_label(
+                                MUTED,
+                                "Wähle eine Vorschau, um das Wallpaper anzupassen und anzuwenden.",
+                            );
+                        }
+                    });
+            }
+            Tab::Workshop => {
+                egui::SidePanel::left("workshop_filters")
+                    .exact_width(side_width)
+                    .resizable(false)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(PANEL)
+                            .inner_margin(egui::Margin::symmetric(16, 24)),
+                    )
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("workshop_filters_scroll")
+                            .show(ui, |ui| self.workshop_filters(ui));
+                    });
+                egui::SidePanel::right("workshop_inspector")
+                    .default_width(368.0)
+                    .width_range(320.0..=480.0)
+                    .frame(egui::Frame::new().fill(PANEL).inner_margin(24.0))
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("workshop_detail")
+                            .show(ui, |ui| self.workshop_detail(ui, ctx));
+                    });
+            }
+            Tab::Setup | Tab::Activity => {
+                egui::SidePanel::left("settings_navigation")
+                    .exact_width(side_width)
+                    .resizable(false)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(PANEL)
+                            .inner_margin(egui::Margin::symmetric(16, 24)),
+                    )
+                    .show(ctx, |ui| {
+                        let before = self.settings_ui.page;
+                        self.settings_navigation(ui);
+                        if before != self.settings_ui.page {
+                            self.tab = Tab::Setup;
+                        }
+                        if self.tab == Tab::Activity
+                            && ui.button("Zurück zu Einstellungen").clicked()
+                        {
+                            self.tab = Tab::Setup;
+                        }
+                    });
+            }
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(16.0))
+            .frame(egui::Frame::new().fill(BG).inner_margin(
+                if self.tab == Tab::Setup && !compact {
+                    32.0
+                } else {
+                    24.0
+                },
+            ))
             .show(ctx, |ui| match self.tab {
                 Tab::Library => self.library(ui, ctx),
                 Tab::Workshop => self.workshop_browser(ui, ctx),
-                Tab::Setup => {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.setup(ui, ctx));
-                }
+                Tab::Setup => self.setup(ui, ctx),
                 Tab::Activity => {
                     egui::ScrollArea::vertical().show(ui, |ui| self.activity(ui, ctx));
                 }
             });
         let assignments = self.display_wallpapers();
+        self.display_picker.previews.clear();
+        for (output, current) in &assignments {
+            let path = self
+                .scan
+                .wallpapers
+                .iter()
+                .find(|w| w.matches_folder(&current.folder))
+                .and_then(|w| w.preview.clone());
+            if let Some(path) = path {
+                self.thumbnail(&path, ctx);
+                if let Some(Some(texture)) = self.textures.get(&path) {
+                    self.display_picker
+                        .previews
+                        .insert(output.clone(), texture.clone());
+                }
+            }
+        }
         let chosen = self
             .display_picker
             .show(ctx, &self.monitors, &mut self.output, &assignments);
         if chosen || previous_output != self.output {
             self.select_display_wallpaper(ctx);
             self.message = match self.display_wallpaper(&self.output) {
-                Some(current) => format!("{} · {}: {}", self.output, current.state, current.title),
+                Some(current) => format!(
+                    "{} · {}: {}",
+                    self.output,
+                    theme::playback(current.state),
+                    current.title
+                ),
                 None => format!(
-                    "No wallpaper set on {}. Double-click a wallpaper to apply it.",
+                    "Kein Wallpaper auf {}. Doppelklick auf eine Vorschau zum Anwenden.",
                     self.output
                 ),
             };
@@ -1839,7 +1920,7 @@ impl eframe::App for App {
 }
 
 pub fn run(paths: Paths, restore_missing: bool) -> Result<()> {
-    run_inner(paths, None, None, None, restore_missing)
+    run_inner(paths, None, None, None, restore_missing, None)
 }
 
 /// Capture only this app's rendered UI, without collecting other desktop windows.
@@ -1848,11 +1929,26 @@ pub fn snapshot(
     destination: PathBuf,
     workshop: Option<String>,
     wallpaper: Option<String>,
+    settings: bool,
+    settings_files: bool,
 ) -> Result<()> {
     let wallpaper = wallpaper
         .map(|target| library::resolve(&target, &paths.load()?))
         .transpose()?;
-    run_inner(paths, Some(destination), workshop, wallpaper, false)
+    run_inner(
+        paths,
+        Some(destination),
+        workshop,
+        wallpaper,
+        false,
+        if settings_files {
+            Some(settings::SettingsPage::Files)
+        } else if settings {
+            Some(settings::SettingsPage::Playback)
+        } else {
+            None
+        },
+    )
 }
 
 fn run_inner(
@@ -1861,6 +1957,7 @@ fn run_inner(
     workshop: Option<String>,
     wallpaper: Option<Wallpaper>,
     restore_missing: bool,
+    settings: Option<settings::SettingsPage>,
 ) -> Result<()> {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     eprintln!(
@@ -1875,7 +1972,7 @@ fn run_inner(
         // See glutin::surface::SwapInterval's Wayland-specific documentation.
         vsync: !wayland,
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1360.0, 840.0])
+            .with_inner_size([1600.0, 1040.0])
             .with_min_inner_size([960.0, 640.0])
             .with_app_id("io.wallweave.Wallweave"),
         ..Default::default()
@@ -1890,6 +1987,10 @@ fn run_inner(
             app.startup_restore = app.snapshot.is_none();
             if app.snapshot.is_some() {
                 app.workshop.resume_ids.clear();
+                if let Some(page) = settings {
+                    app.tab = Tab::Setup;
+                    app.settings_ui.page = page;
+                }
             } else if !app.workshop.resume_ids.is_empty() {
                 app.connect_workshop();
             }
@@ -1952,6 +2053,58 @@ mod tests {
             preview: None,
             properties: BTreeMap::new(),
             localization: Default::default(),
+        }
+    }
+
+    #[test]
+    fn library_toolbar_and_cards_fit_compact_content_widths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = egui::Context::default();
+        let mut app = App::new(
+            Paths {
+                config: dir.path().join("config.toml"),
+                state: dir.path().join("state"),
+                runtime: dir.path().join("run"),
+            },
+            &ctx,
+        );
+        app.startup_restore = false;
+        app.scanning = false;
+        app.scan.wallpapers = (100..112)
+            .map(|id| fixture(&id.to_string(), "web"))
+            .collect();
+        app.collection.preferences.sort = Sort::SubscribedNewest;
+        app.output = "DP-1".into();
+        app.config.assignments.insert(
+            "DP-1".into(),
+            crate::config::Assignment {
+                wallpaper: app.scan.wallpapers[0].folder.clone(),
+                properties: BTreeMap::new(),
+            },
+        );
+        for width in [330.0, 390.0, 960.0] {
+            for _ in 0..3 {
+                let mut used = 0.0;
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            app.library(ui, ctx);
+                            used = ui.min_rect().width();
+                        });
+                    },
+                );
+                assert!(
+                    used <= width,
+                    "library content expanded to {used} at {width}"
+                );
+            }
         }
     }
 

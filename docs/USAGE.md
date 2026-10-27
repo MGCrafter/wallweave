@@ -108,6 +108,36 @@ Installed copies take precedence over staged copies. Saved staging paths still r
 
 Preset projects referencing a separate base wallpaper are not supported yet and are reported with their dependency ID.
 
+## Automatic performance pause
+
+In **Einstellungen → Wiedergabe → Automatisch pausieren**, choose:
+
+- **Wenn eine App im Fokus ist**: pause while another app has focus, including windowed games, or while an app is fullscreen/maximized.
+- **Nur bei Vollbild oder maximierten Apps**: ordinary focused windows leave the wallpaper running.
+- **Nie automatisch pausieren** (default): disable the renderer's app-window pause rules.
+
+Wallpapers resume automatically when the condition ends. Hyprland checks the active and special workspaces per monitor, so hiding a special workspace releases its pause even if the app remains open. A background IPC worker checks every 250 ms; failed or stale detection releases automatic pauses. Other desktops use the renderer's native integration; X11 and compositor-specific behavior can differ. Focus mode detects the focused app, not every partially overlapping, unfocused window. Window previews do not receive desktop pause rules. Hyprland requires the cooperative renderer adapter described below. Without `--pause-control-file`, its automatic pause stays off and Settings explains why. Other desktops use supported native window rules.
+
+Saving restarts only desktop wallpapers whose rule changed, preserving their properties and manual pause state. A failed replacement keeps the previous renderer. Manual Pause/Resume remains independent; Resume still obeys automatic rules. Activity shows the requested pause state on Hyprland (the renderer applies it on its next poll); other desktops show the configured renderer rule. Rules remain active after closing the GUI.
+
+```sh
+./run.sh config auto-pause focused
+./run.sh config auto-pause fullscreen
+./run.sh config auto-pause off
+```
+
+The preference is saved separately in `auto-pause.json` in Wallweave's state directory, preserving compatibility with existing `config.toml` files. When updating an already-running older supervisor, run `./run.sh shutdown` once and reopen Wallweave to restore the saved wallpapers with the new rules.
+
+Manual and Hyprland pause now require a cooperative renderer build:
+
+```sh
+python3 scripts/build-pause-renderer.py --install
+```
+
+This requires the upstream C++/CMake/Ninja development dependencies, including matching V8/Node headers and `libnode`. Optional `--v8-include-dir` and `--v8-library` arguments select an existing local development runtime. The script builds a pinned upstream revision plus `patches/renderer-cooperative-pause.patch`, checks it and installs under this checkout's `runtime/`; it does not enable auto-pause or restart existing wallpapers. The original portable renderer remains installed. A missing/invalid control file or a pause lease not renewed for three seconds releases the external pause. Audio threads are never stopped.
+
+The upstream switches follow the [bundled renderer's documentation](https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/tree/v0.9.4#usage).
+
 ## Steam Workshop
 
 Since 0.2.4, **Installed → Sort** also offers **Subscribed: newest first** and **Subscribed: oldest first**. Selecting either reads every page of the signed-in account's subscriptions through the existing Steam connection and caches the dates for offline use. **Sync Steam dates** refreshes them. The source is Steam's `m_rtimeAddedToUserList` on subscription-list queries ([Steamworks documentation](https://partner.steamgames.com/doc/api/isteamugc#SteamUGCDetails_t)); file modification, installation and Workshop publication times are not used. Local projects and items without a known subscription date appear last in both directions, with title ordering for ties. A failed sync leaves the previous cache available.
@@ -161,13 +191,13 @@ Workshop thumbnails use a bounded Steam-hosted image cache in the app's state di
 ./run.sh shutdown
 ```
 
-`plan` prints the exact argument list without launching the renderer:
+`plan` prints the wallpaper arguments without launching the renderer. The supervisor adds a private pause-control path when starting a cooperative renderer:
 
 ```sh
 ./run.sh plan 1234567890 --output DP-1
 ```
 
-No shell is used to start renderers. Preview is a separate managed output named `preview`. Pausing suspends that renderer's process group; resuming continues it. Automatic fullscreen pause remains the renderer's responsibility.
+No shell is used to start renderers. Preview is a separate managed output named `preview`. Manual pause requires `--pause-control-file`; unsupported renderers return an error and keep playing. No renderer process is suspended. Hyprland window rules are evaluated by the supervisor; other desktops use the renderer's native rules.
 
 Assignments are saved only after the renderer survives its initial startup interval. A running process is not a visual compatibility check. Opening the GUI automatically restores saved wallpapers and property overrides on connected displays once renderer, assets and monitor discovery are ready. It keeps existing running or paused wallpapers. Unavailable content remains saved and errors for one display do not stop the other displays from restoring. The CLI `restore` command explicitly reapplies saved assignments. Starting Wallweave at login remains a separate desktop-session preference.
 

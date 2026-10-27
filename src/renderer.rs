@@ -1,5 +1,5 @@
 use crate::{
-    config::Config,
+    config::{AutoPause, Config},
     desktop,
     library::{self, Wallpaper},
 };
@@ -72,8 +72,12 @@ impl Renderer {
             "--silent",
             "--volume",
             "--control-file",
+            "--pause-control-file",
             "--web-frames",
             "--layer",
+            "--no-fullscreen-pause",
+            "--pause-on-focus",
+            "--pause-on-maximized",
         ];
         let supported_flags: Vec<_> = flags
             .into_iter()
@@ -94,6 +98,20 @@ impl Renderer {
     }
     pub fn supports(&self, flag: &str) -> bool {
         self.supported_flags.iter().any(|s| s == flag)
+    }
+
+    pub fn supports_auto_pause(&self, mode: AutoPause) -> bool {
+        match mode {
+            AutoPause::Off => self.supports("--no-fullscreen-pause"),
+            // Fullscreen detection is part of the basic renderer. The extended
+            // maximized-window rule is optional on wlroots desktops.
+            AutoPause::Fullscreen => true,
+            AutoPause::Focused => self.supports("--pause-on-focus"),
+        }
+    }
+
+    pub fn supports_pause_control(&self) -> bool {
+        self.supports("--pause-control-file")
     }
 }
 
@@ -123,6 +141,53 @@ pub struct LaunchPlan {
     pub arguments: Vec<OsString>,
     pub wallpaper: Wallpaper,
     pub output: String,
+}
+
+impl LaunchPlan {
+    /// Preview windows stay independent of desktop pause rules. Unsupported
+    /// focus rules fall back to the renderer's existing fullscreen behavior.
+    pub fn auto_pause(
+        &mut self,
+        renderer: &Renderer,
+        mode: AutoPause,
+        workspace_aware: bool,
+    ) -> Option<AutoPause> {
+        if self.output == "preview" {
+            if renderer.supports("--no-fullscreen-pause") {
+                self.arguments.push("--no-fullscreen-pause".into());
+            }
+            return None;
+        }
+        if workspace_aware && renderer.supports("--no-fullscreen-pause") {
+            // Our supervisor checks Hyprland workspace visibility; stale
+            // foreign-toplevel flags must not independently keep it paused.
+            self.arguments.push("--no-fullscreen-pause".into());
+            // Never substitute process suspension for cooperative renderer
+            // pause: stopping audio threads can stall the system audio graph.
+            return Some(if renderer.supports_pause_control() {
+                mode
+            } else {
+                AutoPause::Off
+            });
+        }
+        let effective = if renderer.supports_auto_pause(mode) {
+            mode
+        } else {
+            AutoPause::Fullscreen
+        };
+        match effective {
+            AutoPause::Off => self.arguments.push("--no-fullscreen-pause".into()),
+            AutoPause::Fullscreen | AutoPause::Focused => {
+                if effective == AutoPause::Focused {
+                    self.arguments.push("--pause-on-focus".into());
+                }
+                if renderer.supports("--pause-on-maximized") {
+                    self.arguments.push("--pause-on-maximized".into());
+                }
+            }
+        }
+        Some(effective)
+    }
 }
 
 pub fn plan(

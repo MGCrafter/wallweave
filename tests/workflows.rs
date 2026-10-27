@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 use wallweave::{
-    config::{Config, Paths},
+    config::{AutoPause, Config, Paths},
     desktop::Desktop,
     library::{self, Wallpaper},
     renderer::{self, Renderer},
@@ -54,7 +54,7 @@ fn fake_renderer(root: &Path, fails: bool) -> PathBuf {
     } else {
         "renderer with spaces"
     });
-    let help = "--assets-dir --screen-root --bg --window --fps --set-property --silent --volume --scaling --layer";
+    let help = "--pause-control-file --assets-dir --screen-root --bg --window --fps --set-property --silent --volume --scaling --layer";
     write(
         &path,
         &format!(
@@ -62,9 +62,33 @@ fn fake_renderer(root: &Path, fails: bool) -> PathBuf {
             if fails {
                 "echo intentional-startup-failure >&2; exit 27"
             } else {
-                "trap 'exit 0' TERM INT\nsleep 90 &\nwait"
+                "exec python3 -u \"$0.py\" \"$@\""
             }
         ),
+    );
+    write(
+        path.with_file_name(format!(
+            "{}.py",
+            path.file_name().expect("name").to_string_lossy()
+        )),
+        r#"import pathlib, sys, time
+args = sys.argv[1:]
+control = pathlib.Path(args[args.index('--pause-control-file') + 1]) if '--pause-control-file' in args else None
+previous = None
+count = 0
+while True:
+    if control:
+        try:
+            paused = control.read_text() == 'pause\n'
+        except FileNotFoundError:
+            paused = False
+        if paused != previous:
+            print('CONTROL paused' if paused else 'CONTROL playing', flush=True)
+            previous = paused
+        control.with_name('heartbeat').write_text(str(count))
+    count += 1
+    time.sleep(.03)
+"#,
     );
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
     path
@@ -596,9 +620,20 @@ struct Daemon {
 }
 impl Daemon {
     fn start(paths: Paths, root: &Path) -> Self {
-        let child = Command::new(env!("CARGO_BIN_EXE_wallweave"))
+        Self::with_hyprland(paths, root, None)
+    }
+    fn with_hyprland(paths: Paths, root: &Path, runtime: Option<&Path>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_wallweave"));
+        command
             .arg("daemon")
             .env("WALLWEAVE_HOME", root)
+            .env_remove("HYPRLAND_INSTANCE_SIGNATURE");
+        if let Some(runtime) = runtime {
+            command
+                .env("XDG_RUNTIME_DIR", runtime)
+                .env("HYPRLAND_INSTANCE_SIGNATURE", "fixture");
+        }
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -977,6 +1012,9 @@ fn restore_works_with_an_older_supervisor_without_replacing_its_wallpaper() {
             wallpaper: folder,
             pid: 1234,
             paused: true,
+            auto_pause: None,
+            auto_paused: None,
+            pause_supported: true,
             log: "/fixture/log".into(),
         }];
         let deadline = Instant::now() + Duration::from_secs(4);
@@ -1060,4 +1098,568 @@ fn stale_gui_preferences_keep_new_supervisor_assignments() {
     paths.save(&current).expect("supervisor save");
     paths.save_preferences(&stale).expect("GUI save");
     assert_eq!(paths.load().expect("load").assignments.len(), 1);
+}
+
+fn pause_renderer(root: &Path) -> PathBuf {
+    let path = fake_renderer(root, false);
+    let script = fs::read_to_string(&path).expect("script").replace(
+        "--assets-dir --screen-root",
+        "--no-fullscreen-pause --pause-on-focus --pause-on-maximized --assets-dir --screen-root",
+    );
+    fs::write(&path, script).expect("extended renderer");
+    path
+}
+
+#[test]
+fn auto_pause_preferences_preserve_legacy_configuration_and_reject_invalid_values() {
+    let temp = tempfile::tempdir().expect("temp");
+    let paths = paths(temp.path());
+    paths.save(&Config::default()).expect("config");
+    let original = fs::read(&paths.config).expect("original");
+    assert_eq!(AutoPause::load(&paths).expect("default"), AutoPause::Off);
+    for mode in [AutoPause::Off, AutoPause::Fullscreen, AutoPause::Focused] {
+        mode.save(&paths).expect("save");
+        assert_eq!(AutoPause::load(&paths).expect("load"), mode);
+        assert_eq!(fs::read(&paths.config).expect("config unchanged"), original);
+    }
+    write(paths.state.join("auto-pause.json"), "\"invalid\"");
+    assert!(AutoPause::load(&paths).is_err());
+    assert_eq!(
+        fs::read_to_string(paths.state.join("auto-pause.json")).expect("read"),
+        "\"invalid\""
+    );
+}
+
+#[test]
+fn pause_rules_use_supported_renderer_flags_and_exclude_previews() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let mut config = config(root);
+    config.renderer = Some(pause_renderer(root));
+    let wallpaper = Wallpaper::load(&wallpaper(root)).expect("wallpaper");
+    let engine = Renderer::detect(&config).expect("engine");
+    for (mode, flags) in [
+        (AutoPause::Off, vec!["--no-fullscreen-pause"]),
+        (AutoPause::Fullscreen, vec!["--pause-on-maximized"]),
+        (
+            AutoPause::Focused,
+            vec!["--pause-on-focus", "--pause-on-maximized"],
+        ),
+    ] {
+        for preview in [false, true] {
+            let mut plan = renderer::plan(
+                &engine,
+                &config,
+                wallpaper.clone(),
+                "DP-1",
+                preview,
+                &BTreeMap::new(),
+            )
+            .expect("plan");
+            assert_eq!(
+                plan.auto_pause(&engine, mode, false),
+                (!preview).then_some(mode)
+            );
+            for flag in [
+                "--no-fullscreen-pause",
+                "--pause-on-focus",
+                "--pause-on-maximized",
+            ] {
+                let expected = if preview {
+                    flag == "--no-fullscreen-pause"
+                } else {
+                    flags.contains(&flag)
+                };
+                assert_eq!(
+                    plan.arguments.iter().any(|arg| arg == flag),
+                    expected,
+                    "{mode:?} preview={preview}: {flag}"
+                );
+            }
+        }
+    }
+    let mut basic = engine.clone();
+    basic.supported_flags.retain(|flag| !flag.contains("pause"));
+    for mode in [AutoPause::Off, AutoPause::Focused] {
+        assert!(!basic.supports_auto_pause(mode));
+        let mut plan = renderer::plan(
+            &basic,
+            &config,
+            wallpaper.clone(),
+            "DP-1",
+            false,
+            &BTreeMap::new(),
+        )
+        .expect("plan");
+        assert_eq!(
+            plan.auto_pause(&basic, mode, false),
+            Some(AutoPause::Fullscreen)
+        );
+        assert!(
+            !plan
+                .arguments
+                .iter()
+                .any(|arg| arg.to_string_lossy().contains("pause"))
+        );
+    }
+}
+
+#[test]
+fn changing_auto_pause_preserves_manual_pauses_previews_and_failed_replacements() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let paths = paths(root);
+    AutoPause::Focused.save(&paths).expect("focused");
+    let mut config = config(root);
+    config.renderer = Some(pause_renderer(root));
+    paths.save(&config).expect("config");
+    let folder = wallpaper(root);
+    let daemon = Daemon::start(paths.clone(), root);
+    for output in ["DP-1", "DP-2", "preview"] {
+        assert!(
+            daemon
+                .send(Request::Apply {
+                    target: folder.display().to_string(),
+                    output: output.into(),
+                    preview: output == "preview",
+                    properties: BTreeMap::from([("message".into(), "keep me".into())]),
+                })
+                .ok
+        );
+    }
+    let before = daemon.send(Request::Pause {
+        output: Some("DP-1".into()),
+    });
+    let pids: BTreeMap<_, _> = before
+        .states
+        .iter()
+        .map(|state| (state.output.clone(), state.pid))
+        .collect();
+    assert_eq!(before.states[0].auto_pause, Some(AutoPause::Focused));
+    AutoPause::Off.save(&paths).expect("off");
+    let changed = daemon.send(Request::ReloadPlayback);
+    assert!(changed.ok, "{}", changed.message);
+    for state in &changed.states {
+        if state.output == "preview" {
+            assert_eq!(state.pid, pids[&state.output]);
+            assert_eq!(state.auto_pause, None);
+        } else {
+            assert_ne!(state.pid, pids[&state.output]);
+            assert_eq!(state.auto_pause, Some(AutoPause::Off));
+            assert_eq!(state.paused, state.output == "DP-1");
+            let log = service::tail(&state.log, 4000);
+            assert!(log.contains("--no-fullscreen-pause"));
+            assert!(log.contains("message=keep me"));
+            let process =
+                fs::read_to_string(format!("/proc/{}/status", state.pid)).expect("live process");
+            assert!(
+                !process.contains("T (stopped)"),
+                "Audio/event loops must stay alive"
+            );
+            wait_control(state, state.output == "DP-1");
+        }
+    }
+    let unchanged = daemon.send(Request::ReloadPlayback);
+    assert!(unchanged.ok);
+    assert_eq!(
+        unchanged.states.iter().map(|s| s.pid).collect::<Vec<_>>(),
+        changed.states.iter().map(|s| s.pid).collect::<Vec<_>>()
+    );
+    // A new setting must not tear down a working wallpaper if its replacement fails.
+    let mut failing = paths.load().expect("saved config");
+    failing.renderer = Some(fake_renderer(root, true));
+    paths.save(&failing).expect("failing renderer");
+    AutoPause::Fullscreen.save(&paths).expect("fullscreen");
+    let failed = daemon.send(Request::ReloadPlayback);
+    assert!(!failed.ok);
+    assert_eq!(
+        failed.states.iter().map(|s| s.pid).collect::<Vec<_>>(),
+        changed.states.iter().map(|s| s.pid).collect::<Vec<_>>()
+    );
+    assert!(
+        failed
+            .states
+            .iter()
+            .find(|s| s.output == "DP-1")
+            .expect("paused")
+            .paused
+    );
+    failing.renderer = config.renderer;
+    paths.save(&failing).expect("restore renderer");
+    let retried = daemon.send(Request::ReloadPlayback);
+    assert!(retried.ok, "{}", retried.message);
+    for state in retried.states.iter().filter(|s| s.output != "preview") {
+        assert_eq!(state.auto_pause, Some(AutoPause::Fullscreen));
+        let log = service::tail(&state.log, 4000);
+        assert!(log.contains("--pause-on-maximized"));
+        assert!(!log.contains("--pause-on-focus"));
+        assert_eq!(state.paused, state.output == "DP-1");
+    }
+    assert_eq!(paths.load().expect("assignments").assignments.len(), 2);
+}
+
+#[test]
+fn hidden_hyprland_special_workspaces_resume_the_same_owned_processes() {
+    use serde_json::json;
+    use std::{
+        io::{Read, Write},
+        os::unix::net::UnixListener,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+    // Keep stale mapped/focus/fullscreen data while toggling only the monitor's
+    // special workspace, exactly as Super+M/S can do on Hyprland.
+    struct Compositor {
+        alive: Arc<AtomicBool>,
+        reply: Arc<Mutex<(bool, bool)>>,
+        worker: Option<thread::JoinHandle<()>>,
+    }
+    impl Drop for Compositor {
+        fn drop(&mut self) {
+            self.alive.store(false, Ordering::Relaxed);
+            if let Some(worker) = self.worker.take() {
+                worker.join().expect("compositor");
+            }
+        }
+    }
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let paths = paths(root);
+    AutoPause::Focused.save(&paths).expect("focused");
+    let mut config = config(root);
+    config.renderer = Some(pause_renderer(root));
+    paths.save(&config).expect("config");
+    let folder = wallpaper(root);
+    let runtime = root.join("hypr-runtime");
+    let socket = runtime.join("hypr/fixture/.socket.sock");
+    fs::create_dir_all(socket.parent().expect("parent")).expect("runtime");
+    let listener = UnixListener::bind(socket).expect("compositor socket");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let alive = Arc::new(AtomicBool::new(true));
+    let reply = Arc::new(Mutex::new((false, false)));
+    let thread_alive = alive.clone();
+    let thread_reply = reply.clone();
+    let worker = thread::spawn(move || {
+        while thread_alive.load(Ordering::Relaxed) {
+            let Ok((mut stream, _)) = listener.accept() else {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .expect("timeout");
+            let mut buffer = [0; 128];
+            let Ok(count) = stream.read(&mut buffer) else {
+                continue;
+            };
+            let (visible, broken) = *thread_reply.lock().expect("reply");
+            let response = if broken {
+                // Malformed replies must release only automatic pauses.
+                json!({"error":"compositor unavailable"})
+            } else {
+                match &buffer[..count] {
+                    b"j/monitors" => json!([
+                        {"id":1,"name":"DP-1","activeWorkspace":{"id":13},"specialWorkspace":{"id":if visible {-96} else {0}}},
+                        {"id":2,"name":"DP-2","activeWorkspace":{"id":2},"specialWorkspace":{"id":0}}
+                    ]),
+                    b"j/clients" => {
+                        json!([{"address":"0x1","monitor":1,"workspace":{"id":-96},"mapped":true,"hidden":false,"visible":true,"fullscreen":2}])
+                    }
+                    b"j/activewindow" => json!({"address":"0x1"}),
+                    _ => panic!("Unexpected compositor request"),
+                }
+            };
+            let _ = stream.write_all(&serde_json::to_vec(&response).expect("json"));
+        }
+    });
+    let compositor = Compositor {
+        alive,
+        reply,
+        worker: Some(worker),
+    };
+    let daemon = Daemon::with_hyprland(paths.clone(), root, Some(&runtime));
+    for output in ["DP-1", "DP-2", "preview"] {
+        assert!(
+            daemon
+                .send(Request::Apply {
+                    target: folder.display().to_string(),
+                    output: output.into(),
+                    preview: output == "preview",
+                    properties: BTreeMap::new(),
+                })
+                .ok
+        );
+    }
+    let initial = daemon.send(Request::Status);
+    let original: BTreeMap<_, _> = initial
+        .states
+        .iter()
+        .map(|s| (s.output.clone(), s.pid))
+        .collect();
+    let wait_for = |automatic: bool, manual: bool| {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            let states = daemon.send(Request::Status).states;
+            let first = states.iter().find(|s| s.output == "DP-1").expect("DP-1");
+            if first.auto_paused == Some(automatic) && first.paused == manual {
+                let stopped = fs::read_to_string(format!("/proc/{}/status", first.pid))
+                    .expect("process")
+                    .contains("T (stopped)");
+                assert!(
+                    !stopped,
+                    "Pause must not freeze the renderer audio/event loop"
+                );
+                if control_paused(first) == (automatic || manual) {
+                    for state in &states {
+                        assert_eq!(
+                            state.pid, original[&state.output],
+                            "Automatic transitions must not restart wallpapers"
+                        );
+                        if state.output == "preview" {
+                            assert_eq!(state.auto_paused, None);
+                        }
+                        if state.output == "DP-2" {
+                            assert_eq!(state.auto_paused, Some(false));
+                        }
+                    }
+                    wait_control(first, automatic || manual);
+                    break;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Expected auto={automatic}, manual={manual}: {states:?}"
+            );
+            thread::sleep(Duration::from_millis(40));
+        }
+    };
+    wait_for(false, false);
+    let first = &initial.states[0];
+    let log = service::tail(&first.log, 4000);
+    assert!(log.contains("--no-fullscreen-pause"));
+    assert!(!log.contains("--pause-on-focus"));
+    for _ in 0..3 {
+        *compositor.reply.lock().expect("show") = (true, false);
+        wait_for(true, false);
+        *compositor.reply.lock().expect("hide") = (false, false);
+        wait_for(false, false);
+    }
+    *compositor.reply.lock().expect("show") = (true, false);
+    wait_for(true, false);
+    assert!(
+        daemon
+            .send(Request::Pause {
+                output: Some("DP-1".into())
+            })
+            .ok
+    );
+    wait_for(true, true);
+    assert!(
+        daemon
+            .send(Request::Resume {
+                output: Some("DP-1".into())
+            })
+            .ok
+    );
+    wait_for(true, false);
+    assert!(
+        daemon
+            .send(Request::Pause {
+                output: Some("DP-1".into())
+            })
+            .ok
+    );
+    *compositor.reply.lock().expect("hide") = (false, false);
+    wait_for(false, true);
+    assert!(
+        daemon
+            .send(Request::Resume {
+                output: Some("DP-1".into())
+            })
+            .ok
+    );
+    wait_for(false, false);
+    *compositor.reply.lock().expect("show") = (true, false);
+    wait_for(true, false);
+    assert!(
+        daemon
+            .send(Request::Pause {
+                output: Some("DP-2".into())
+            })
+            .ok
+    );
+    *compositor.reply.lock().expect("broken") = (true, true);
+    wait_for(false, false);
+    let status = daemon.send(Request::Status);
+    assert!(
+        status
+            .states
+            .iter()
+            .find(|s| s.output == "DP-2")
+            .expect("manual")
+            .paused
+    );
+    assert!(
+        status
+            .failures
+            .iter()
+            .any(|s| s.contains("detection unavailable"))
+    );
+    *compositor.reply.lock().expect("recovered") = (true, false);
+    wait_for(true, false);
+    // Changing the policy while automatically paused must not turn it into a
+    // manual pause; the replacement is allowed to run with automatic pause off.
+    AutoPause::Off.save(&paths).expect("off");
+    let disabled = daemon.send(Request::ReloadPlayback);
+    assert!(disabled.ok, "{}", disabled.message);
+    let state = disabled
+        .states
+        .iter()
+        .find(|s| s.output == "DP-1")
+        .expect("DP-1");
+    assert!(!state.paused);
+    assert_eq!(state.auto_paused, Some(false));
+    assert_eq!(state.auto_pause, Some(AutoPause::Off));
+}
+
+fn control_path(state: &service::RunState) -> PathBuf {
+    let log = fs::read_to_string(&state.log).expect("log");
+    let mut lines = log.lines();
+    while let Some(line) = lines.next() {
+        if line == "--pause-control-file" {
+            return PathBuf::from(lines.next().expect("control path"));
+        }
+    }
+    panic!("No control file: {log}")
+}
+
+#[test]
+fn unsupported_pause_never_suspends_an_audio_capable_renderer() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let paths = paths(root);
+    let mut config = config(root);
+    let renderer = pause_renderer(root);
+    let script = fs::read_to_string(&renderer).expect("script");
+    fs::write(&renderer, script.replace("--pause-control-file ", "")).expect("legacy help");
+    config.renderer = Some(renderer);
+    paths.save(&config).expect("config");
+    AutoPause::Focused
+        .save(&paths)
+        .expect("old saved preference");
+    let daemon = Daemon::with_hyprland(paths.clone(), root, Some(&root.join("hypr")));
+    let applied = daemon.send(Request::Apply {
+        target: wallpaper(root).display().to_string(),
+        output: "DP-1".into(),
+        preview: false,
+        properties: BTreeMap::new(),
+    });
+    assert!(applied.ok, "{}", applied.message);
+    assert!(applied.message.contains("lacks safe pause control"));
+    assert_eq!(applied.states[0].auto_pause, Some(AutoPause::Off));
+    assert!(!applied.states[0].pause_supported);
+    let paused = daemon.send(Request::Pause { output: None });
+    assert!(!paused.ok);
+    assert!(paused.message.contains("cannot pause safely"));
+    assert!(!paused.states[0].paused);
+    assert_eq!(paused.states[0].pid, applied.states[0].pid);
+    assert!(
+        !fs::read_to_string(format!("/proc/{}/status", paused.states[0].pid))
+            .expect("alive")
+            .contains("T (stopped)")
+    );
+    assert_eq!(
+        AutoPause::load(&paths).expect("preference preserved"),
+        AutoPause::Focused
+    );
+}
+
+#[test]
+fn pause_control_is_private_renewed_and_removed_without_affecting_other_outputs() {
+    let temp = tempfile::tempdir().expect("temp");
+    let root = temp.path();
+    let paths = paths(root);
+    paths.save(&config(root)).expect("config");
+    let daemon = Daemon::start(paths, root);
+    for output in ["DP-1", "DP-2"] {
+        assert!(
+            daemon
+                .send(Request::Apply {
+                    target: wallpaper(root).display().to_string(),
+                    output: output.into(),
+                    preview: false,
+                    properties: BTreeMap::new(),
+                })
+                .ok
+        );
+    }
+    let status = daemon.send(Request::Pause {
+        output: Some("DP-1".into()),
+    });
+    assert!(status.ok);
+    let first = &status.states[0];
+    let second = &status.states[1];
+    let first_path = control_path(first);
+    let second_path = control_path(second);
+    assert_ne!(first_path, second_path);
+    assert_eq!(
+        fs::metadata(first_path.parent().expect("dir"))
+            .expect("private dir")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    wait_control(first, true);
+    wait_control(second, false);
+    let before = fs::metadata(&first_path)
+        .expect("stat")
+        .modified()
+        .expect("mtime");
+    thread::sleep(Duration::from_millis(650));
+    assert!(
+        fs::metadata(&first_path)
+            .expect("renewed")
+            .modified()
+            .expect("mtime")
+            > before
+    );
+    assert!(
+        daemon
+            .send(Request::Stop {
+                output: Some("DP-1".into())
+            })
+            .ok
+    );
+    assert!(!first_path.exists());
+    assert!(second_path.exists());
+    wait_control(second, false);
+}
+
+fn control_paused(state: &service::RunState) -> bool {
+    fs::read_to_string(control_path(state)).expect("control") == "pause\n"
+}
+
+fn wait_control(state: &service::RunState, paused: bool) {
+    assert_eq!(control_paused(state), paused);
+    let path = control_path(state).with_file_name("heartbeat");
+    let before = fs::read_to_string(&path).expect("heartbeat");
+    thread::sleep(Duration::from_millis(140));
+    let after = fs::read_to_string(path).expect("heartbeat after pause");
+    assert_ne!(
+        before, after,
+        "Renderer callbacks must continue during pause"
+    );
+    let log = service::tail(&state.log, 4000);
+    let last = log.lines().rfind(|line| line.starts_with("CONTROL "));
+    assert_eq!(
+        last,
+        Some(if paused {
+            "CONTROL paused"
+        } else {
+            "CONTROL playing"
+        })
+    );
 }

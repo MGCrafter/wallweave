@@ -151,6 +151,44 @@ pub struct Assignment {
     pub properties: BTreeMap<String, String>,
 }
 
+/// Kept outside config.toml so an older, running supervisor can still read it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoPause {
+    #[default]
+    Off,
+    Fullscreen,
+    Focused,
+}
+
+impl AutoPause {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Never",
+            Self::Fullscreen => "Fullscreen or maximized app",
+            Self::Focused => "Focused, fullscreen or maximized app",
+        }
+    }
+
+    pub fn load(paths: &Paths) -> Result<Self> {
+        match fs::read(paths.state.join("auto-pause.json")) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("Invalid auto-pause preference"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error).context("Read auto-pause preference"),
+        }
+    }
+
+    pub fn save(self, paths: &Paths) -> Result<()> {
+        fs::create_dir_all(&paths.state)?;
+        let mut file = tempfile::NamedTempFile::new_in(&paths.state)?;
+        serde_json::to_writer(&mut file, &self)?;
+        file.as_file().sync_all()?;
+        file.persist(paths.state.join("auto-pause.json"))
+            .map_err(|e| e.error)?;
+        Ok(())
+    }
+}
+
 pub fn absolute(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_path_buf())

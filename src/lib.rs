@@ -4,6 +4,7 @@ pub mod library;
 pub mod renderer;
 pub mod service;
 pub mod vdf;
+pub mod visibility;
 pub mod workshop;
 
 #[cfg(feature = "gui")]

@@ -27,6 +27,40 @@ Flatpak Steam connectivity, offline-to-online transitions during a transfer, and
 
 The supervisor tests use executable fixtures, not a real wallpaper engine. They verify process lifecycle, per-monitor pause/stop, startup-failure preservation, missing mounts, retained assignments and that an unrelated process is not signalled.
 
+## Automatic performance pause (2026-10-27)
+
+**Superseded safety finding:** the subsequent Hyprland process-suspension implementation caused system-wide audio dropouts when Discord gained focus. Passing process-stop/resume tests did not establish audio safety. That implementation has been removed; see the cooperative-pause validation below.
+
+- All 61 tests passed, plus `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings` and `cargo check --locked --no-default-features`.
+- Fake-renderer coverage checks supported flags for every mode, unsupported-renderer fallback, preview isolation, preference persistence without changing legacy configuration, unchanged-rule no-ops, preservation of properties/manual pause and keeping old processes after a failed replacement.
+- Captured and visually inspected the native Settings view with the new Performance control. The release binary and Steam runtime were installed using `scripts/build-app.py`.
+- Restored the existing three wallpapers under the updated supervisor in Hyprland 0.56.2 with bundled renderer v0.9.4. All three processes received the native focus/maximized flags and remained running without supervisor failures. Native logs recorded `Paused: windows` and `Resumed` during actual focus changes; read-only checks confirmed the focused output was paused.
+- A temporary GTK window was opened normally and fullscreen, then closed. Its initial scripted monitor-placement check failed because the installed Hyprland no longer accepts the legacy dispatcher, so this is not a deterministic fullscreen/monitor test pass. The subsequent focus checks used live window/output data without moving user windows. Actual game performance, GPU savings and equivalent behavior on KDE/GNOME remain unverified.
+
+## Hyprland special-workspace resume fix (2026-10-27)
+
+- Super+M/S in the user's configuration toggle special workspaces rather than closing their applications. Hidden clients can retain mapped, visible and focus/fullscreen state. The initial native renderer-only integration did not validate workspace membership.
+- Hyprland now uses a supervisor worker with bounded IPC reads and a two-second freshness limit. Automatic process-group pause is separate from manual pause. Competing renderer window rules are disabled; malformed or stale compositor replies release automatic pauses only.
+- All 66 tests pass, including an IPC fixture that repeatedly shows/hides a special workspace while leaving stale focus/fullscreen client flags intact. It verifies the same owned PID resumes, actual process stop/continue state, preview/other-output isolation, retained manual pauses, detection failure/recovery and disabling automatic pause. Formatting, Clippy with warnings denied and the CLI-only check also pass.
+- Built and installed the release app and restored the three existing wallpapers with workspace-aware detection. Live testing on DP-1 verified show → pause, six seconds stopped, hide → resume and reopen → pause without changing the renderer PID. Subsequent CPU activity confirmed execution resumed. Closing the test window was not a clean standalone live check: Hyprland had automatically grouped it with existing windows, which remained on the special workspace. The affected ChatGPT/Zen group was returned to workspace 2; closed-window behavior is covered by deterministic tests. No further live window manipulation was used.
+- Captured and inspected the updated Settings view. Real-game benchmarks and other compositor sessions remain outside this check.
+
+## Cooperative pause and audio regression fix (2026-10-27)
+
+- Removed process suspension from manual and automatic pause. The old SIGSTOP path froze the renderer's audio threads and was associated with system-wide audio loss when Discord gained focus. Auto-pause now defaults to off and existing saved preferences are preserved.
+- Added a small GPL-3.0 adapter patch against upstream `a239861367cb8d338ef8ba346f937067c3a266d8`. `--pause-control-file` feeds the renderer's existing internal pause loop. Audio/event threads stay running; private atomic control files combine manual and automatic reasons. Renewal occurs every 500 ms; a missing/invalid/stale file releases external pause within about three seconds. A legacy renderer is never suspended as a fallback. Its manual pause is unavailable and Hyprland automatic pause stays off.
+- All 73 Rust unit/workflow tests passed. The strengthened special-workspace test also verifies that manual Resume does not override an ongoing automatic pause. Renderer heartbeat checks replace the old tests that expected stopped processes. Additional tests cover unsupported renderers, separate private controls, renewal and cleanup. Formatting, Clippy with warnings denied and the CLI-only check passed.
+- A standalone native C++ test checks valid pause/resume, invalid/oversized/missing data, stale renewal and a FIFO without blocking. The modified renderer was built and installed locally using the recorded patch. The installed runtime has no unresolved libraries or dependencies on temporary build paths.
+- `scripts/check-pause-renderer.py` ran against both the build and installed runtime in separate Xvfb, D-Bus, PipeWire, Pulse and WirePlumber sessions. Three real video pause/resume cycles kept the same live process; captured frames stopped changing during pause and changed after resume. An independent 440 Hz stream remained present in every sampled 200 ms audio window through the cycles. Lease expiry resumed playback. The test uses a null sink and does not route test sound to the user's devices. Its initial run passed the media checks but exposed a private document-portal cleanup race; the final harness disables D-Bus service activation and exits cleanly.
+- Installed the app and cooperative renderer, restarted the supervisor and restored exactly the three previously running wallpapers with unchanged assignments/properties. All three report `pause_supported: true`, `auto_pause: off`, no manual/automatic pause and no supervisor failures. The user's disabled auto-pause preference was retained. No user windows or workspaces were moved for this fix.
+- Evidence is stored locally in `dist/cooperative-pause-installed-check/`: native logs, audio measurements and before/after desktop state. This verifies video pause and independent audio in isolation, not every wallpaper/audio backend or game-performance scenario. Automatic pause was deliberately left off on the live desktop; Discord focus was not retested there with the feature enabled.
+
+### Re-enabled at the user's request (2026-10-27)
+
+`config auto-pause focused` enabled the new control for all three desktop wallpapers. Read-only checks confirmed cooperative support on every output, an external pause on the focused display, continued playback on the other displays and no supervisor failures. All renderer processes remained live rather than signal-stopped. No user windows or workspaces were moved. The 73 Rust tests, formatting, Clippy and CLI-only check passed again before uploading the changes. The isolated audio regression results above remain the audio evidence; a live Discord call was not exercised by this check.
+
+The updated portable archive and AppImage built locally and passed checksum, launch, diagnostics, isolated user install/uninstall, desktop-entry and AppImage supervisor-lifetime smoke tests. They contain the cooperative renderer build script/patch and the font license notices. These local packages use the host's library baseline and were not substituted for the existing public v0.2.4 release downloads.
+
 ## Not yet verified
 
 - Full visual equivalence to the original Windows engine and every interactive feature. Short loading/rendering checks cover 44 supported projects; known renderer limitations are listed below.

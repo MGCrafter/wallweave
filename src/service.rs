@@ -1,7 +1,7 @@
 //! Session-local supervisor. Only child process groups started here are signalled.
 use crate::{
-    config::{Assignment, Paths},
-    library, renderer,
+    config::{Assignment, AutoPause, Paths},
+    library, renderer, visibility,
 };
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
@@ -40,6 +40,8 @@ pub enum Request {
         properties: BTreeMap<String, String>,
     },
     Status,
+    /// Apply saved auto-pause rules to running desktop wallpapers.
+    ReloadPlayback,
     /// Start saved wallpapers only on connected outputs without a live renderer.
     Restore {
         outputs: Vec<String>,
@@ -63,7 +65,35 @@ pub struct RunState {
     pub wallpaper: PathBuf,
     pub pid: u32,
     pub paused: bool,
+    /// Effective renderer rule, not a report of its instantaneous pause state.
+    #[serde(default)]
+    pub auto_pause: Option<AutoPause>,
+    /// Separate from manual pause: None means renderer-managed detection.
+    #[serde(default)]
+    pub auto_paused: Option<bool>,
+    /// A cooperative renderer control is available; no process suspension.
+    #[serde(default)]
+    pub pause_supported: bool,
     pub log: PathBuf,
+}
+
+impl RunState {
+    pub fn playback_label(&self) -> &'static str {
+        if self.paused {
+            "Paused"
+        } else if self.auto_paused == Some(true) {
+            "Paused automatically"
+        } else if self.auto_paused == Some(false) {
+            "Playing"
+        } else if matches!(
+            self.auto_pause,
+            Some(AutoPause::Focused | AutoPause::Fullscreen)
+        ) {
+            "Auto-pause enabled"
+        } else {
+            "Playing"
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -85,7 +115,7 @@ fn read_message<T: for<'de> Deserialize<'de>>(stream: &UnixStream) -> Result<T> 
 pub fn client(paths: &Paths, request: &Request) -> Result<Response> {
     let mut stream = UnixStream::connect(paths.socket()).context("Wallweave is not running")?;
     stream.set_read_timeout(Some(Duration::from_secs(
-        if matches!(request, Request::Restore { .. }) {
+        if matches!(request, Request::Restore { .. } | Request::ReloadPlayback) {
             60
         } else {
             15
@@ -94,7 +124,15 @@ pub fn client(paths: &Paths, request: &Request) -> Result<Response> {
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
     serde_json::to_writer(&mut stream, request)?;
     stream.write_all(b"\n")?;
-    read_message(&stream)
+    let mut response: Response = read_message(&stream)?;
+    if matches!(request, Request::ReloadPlayback)
+        && response
+            .message
+            .contains("unknown variant `reload_playback`")
+    {
+        response.message = "Auto-pause preference saved. The running supervisor is from an older version: run wallweave shutdown, then reopen Wallweave to restore your wallpapers with the new rules.".into();
+    }
+    Ok(response)
 }
 
 pub fn ensure_running(paths: &Paths) -> Result<()> {
@@ -216,6 +254,37 @@ struct Running {
     state: RunState,
     staged: bool,
     properties: BTreeMap<String, String>,
+    requested_auto_pause: AutoPause,
+    pause_control: Option<PauseControl>,
+    pause_refresh_at: Instant,
+}
+
+/// One private file per renderer. Atomic replacement avoids partial commands;
+/// removing the directory on shutdown also releases a surviving renderer.
+struct PauseControl(tempfile::TempDir);
+
+impl PauseControl {
+    fn new(paths: &Paths) -> Result<Self> {
+        let control = Self(
+            tempfile::Builder::new()
+                .prefix("pause-")
+                .tempdir_in(&paths.runtime)?,
+        );
+        fs::set_permissions(control.0.path(), fs::Permissions::from_mode(0o700))?;
+        control.set(false)?;
+        Ok(control)
+    }
+
+    fn path(&self) -> PathBuf {
+        self.0.path().join("state")
+    }
+
+    fn set(&self, paused: bool) -> Result<()> {
+        let mut file = tempfile::NamedTempFile::new_in(self.0.path())?;
+        file.write_all(if paused { b"pause\n" } else { b"play\n" })?;
+        file.persist(self.path()).map_err(|e| e.error)?;
+        Ok(())
+    }
 }
 
 impl Running {
@@ -237,19 +306,26 @@ impl Running {
         let _ = self.child.wait();
     }
     fn pause(&mut self, paused: bool) -> Result<()> {
+        self.set_pause(paused, self.state.auto_paused)
+    }
+    fn automatic_pause(&mut self, paused: bool) -> Result<()> {
+        self.set_pause(self.state.paused, Some(paused))
+    }
+    fn set_pause(&mut self, manual: bool, automatic: Option<bool>) -> Result<()> {
         ensure!(
             self.child.try_wait()?.is_none(),
             "Wallpaper renderer has already exited"
         );
-        killpg(
-            Pid::from_raw(self.child.id() as i32),
-            if paused {
-                Signal::SIGSTOP
-            } else {
-                Signal::SIGCONT
-            },
-        )?;
-        self.state.paused = paused;
+        let was_paused = self.state.paused || self.state.auto_paused == Some(true);
+        let paused = manual || automatic == Some(true);
+        if was_paused != paused {
+            self.pause_control.as_ref().context(
+                "This renderer cannot pause safely. Install a renderer with --pause-control-file support; process suspension is disabled to protect system audio."
+            )?.set(paused)?;
+            self.pause_refresh_at = Instant::now();
+        }
+        self.state.paused = manual;
+        self.state.auto_paused = automatic;
         Ok(())
     }
 }
@@ -264,10 +340,27 @@ struct Supervisor {
     active: BTreeMap<String, Running>,
     failures: Vec<String>,
     relocation_at: Instant,
+    visibility: Option<visibility::Watcher>,
+    visibility_error: Option<String>,
 }
 
 impl Supervisor {
     fn poll(&mut self) {
+        // The renderer expires a pause after three seconds without renewal.
+        // A crashed supervisor therefore cannot strand playback in pause.
+        for run in self.active.values_mut() {
+            if (run.state.paused || run.state.auto_paused == Some(true))
+                && run.pause_refresh_at.elapsed() >= Duration::from_millis(500)
+            {
+                if let Some(control) = &run.pause_control
+                    && let Err(error) = control.set(true)
+                {
+                    self.failures
+                        .push(format!("Renewing pause on {}: {error:#}", run.state.output));
+                }
+                run.pause_refresh_at = Instant::now();
+            }
+        }
         if self.relocation_at.elapsed() >= Duration::from_secs(2) {
             self.relocation_at = Instant::now();
             let moved: Vec<_> = self
@@ -334,6 +427,45 @@ impl Supervisor {
             self.active.remove(&key);
             self.failures.push(message);
         }
+        if let Some(watcher) = &self.visibility {
+            let enabled = self.active.values().any(|run| {
+                run.state.auto_paused.is_some() && run.state.auto_pause != Some(AutoPause::Off)
+            });
+            watcher.enabled(enabled);
+            let observation = if enabled {
+                watcher.snapshot()
+            } else {
+                Ok(visibility::Snapshot::default())
+            };
+            let error = observation.as_ref().err().cloned();
+            if error != self.visibility_error {
+                if let Some(error) = &error {
+                    self.failures.push(format!(
+                        "Automatic pause detection unavailable; automatic pauses released: {error}"
+                    ));
+                }
+                self.visibility_error = error;
+            }
+            let snapshot = observation.unwrap_or_default();
+            for run in self
+                .active
+                .values_mut()
+                .filter(|run| run.state.auto_paused.is_some())
+            {
+                let paused = snapshot.pauses(
+                    &run.state.output,
+                    run.state.auto_pause.unwrap_or(AutoPause::Off),
+                );
+                if run.state.auto_paused != Some(paused)
+                    && let Err(error) = run.automatic_pause(paused)
+                {
+                    self.failures.push(format!(
+                        "Automatic pause on {}: {error:#}",
+                        run.state.output
+                    ));
+                }
+            }
+        }
         if self.failures.len() > 20 {
             self.failures.drain(..self.failures.len() - 20);
         }
@@ -351,7 +483,21 @@ impl Supervisor {
         let mut config = self.paths.load()?;
         let wallpaper = library::resolve(target, &config)?;
         let engine = renderer::Renderer::detect(&config)?;
-        let plan = renderer::plan(&engine, &config, wallpaper, output, preview, properties)?;
+        let mut plan = renderer::plan(&engine, &config, wallpaper, output, preview, properties)?;
+        let requested_auto_pause = AutoPause::load(&self.paths)?;
+        let workspace_aware =
+            self.visibility.is_some() && !preview && engine.supports("--no-fullscreen-pause");
+        let auto_pause = plan.auto_pause(&engine, requested_auto_pause, workspace_aware);
+        let pause_control = if engine.supports_pause_control() {
+            let control = PauseControl::new(&self.paths)?;
+            plan.arguments.extend([
+                "--pause-control-file".into(),
+                control.path().into_os_string(),
+            ]);
+            Some(control)
+        } else {
+            None
+        };
         let key = plan.output.clone();
         fs::create_dir_all(self.paths.state.join("logs"))?;
         let safe: String = key
@@ -384,6 +530,9 @@ impl Supervisor {
             wallpaper: plan.wallpaper.folder.clone(),
             pid: child.id(),
             paused: false,
+            auto_pause,
+            auto_paused: workspace_aware.then_some(false),
+            pause_supported: pause_control.is_some(),
             log: log_path.clone(),
         };
         let mut run = Running {
@@ -391,6 +540,9 @@ impl Supervisor {
             state,
             staged: plan.wallpaper.staged,
             properties: properties.clone(),
+            requested_auto_pause,
+            pause_control,
+            pause_refresh_at: Instant::now(),
         };
         // Keep the current wallpaper if the replacement fails during startup.
         thread::sleep(Duration::from_millis(350));
@@ -400,6 +552,13 @@ impl Supervisor {
                 "Renderer exited during startup ({status}).\n{text}\nLog: {}",
                 log_path.display()
             );
+        }
+        if workspace_aware && let Some(watcher) = &self.visibility {
+            let paused = watcher
+                .snapshot()
+                .unwrap_or_default()
+                .pauses(&key, auto_pause.unwrap_or(AutoPause::Off));
+            run.automatic_pause(paused)?;
         }
         self.active.insert(key, run);
         if !preview {
@@ -416,13 +575,62 @@ impl Supervisor {
                 ));
             }
         }
+        let fallback = if workspace_aware
+            && auto_pause == Some(AutoPause::Off)
+            && requested_auto_pause != AutoPause::Off
+        {
+            " Automatic pause is unavailable: this renderer lacks safe pause control. Wallpapers keep playing to protect system audio."
+        } else if auto_pause.is_some_and(|mode| mode != requested_auto_pause) {
+            " The renderer does not support the selected auto-pause rule; using its default fullscreen pause."
+        } else {
+            ""
+        };
         Ok(format!(
-            "Renderer started for {}. Rendering correctness still needs visual verification.",
+            "Renderer started for {}. Rendering correctness still needs visual verification.{fallback}",
             plan.output
         ))
     }
     fn dispatch(&mut self, request: Request) -> Result<String> {
         match request {
+            Request::ReloadPlayback => {
+                let mode = AutoPause::load(&self.paths)?;
+                let targets: Vec<_> = self
+                    .active
+                    .values()
+                    .filter(|run| run.state.output != "preview" && run.requested_auto_pause != mode)
+                    .map(|run| (run.state.clone(), run.properties.clone()))
+                    .collect();
+                let mut updated = 0;
+                let mut errors = vec![];
+                for (state, properties) in targets {
+                    match self.apply(
+                        &state.wallpaper.to_string_lossy(),
+                        &state.output,
+                        false,
+                        &properties,
+                    ) {
+                        Ok(message) => {
+                            updated += 1;
+                            if message.contains("could not save assignment") {
+                                errors.push(message);
+                            }
+                            if state.paused
+                                && let Some(run) = self.active.get_mut(&state.output)
+                                && let Err(error) = run.pause(true)
+                            {
+                                errors.push(format!(
+                                    "{}: restore manual pause: {error:#}",
+                                    state.output
+                                ));
+                            }
+                        }
+                        Err(error) => errors.push(format!("{}: {error:#}", state.output)),
+                    }
+                }
+                let message = format!("Auto-pause rules updated for {updated} wallpaper(s).");
+                ensure!(errors.is_empty(), "{message}\n{}", errors.join("\n"));
+                Ok(message)
+            }
             Request::Apply {
                 target,
                 output,
@@ -569,6 +777,8 @@ pub fn run(paths: Paths) -> Result<()> {
         active: BTreeMap::new(),
         failures: vec![],
         relocation_at: Instant::now(),
+        visibility: visibility::Watcher::start(),
+        visibility_error: None,
     };
     while alive.load(Ordering::Relaxed) {
         supervisor.poll();

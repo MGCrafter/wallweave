@@ -61,12 +61,15 @@ impl PropertiesUi {
         values.retain(|key, _| wallpaper.properties.get(key).is_some_and(editable));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Wallpaper settings").strong());
+            ui.label(RichText::new("Eigenschaften").strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(!values.is_empty(), egui::Button::new("Reset all").small())
+                    .add_enabled(
+                        !values.is_empty(),
+                        egui::Button::new("Alle zurücksetzen").small(),
+                    )
                     .on_hover_text(
-                        "Restore this wallpaper's original settings. Press Apply to use them.",
+                        "Stellt die ursprünglichen Einstellungen wieder her. Danach anwenden.",
                     )
                     .clicked()
                 {
@@ -75,7 +78,7 @@ impl PropertiesUi {
             });
         });
         ui.label(
-            RichText::new("Changes take effect when you press Apply.")
+            RichText::new("Änderungen werden beim Anwenden aktiv.")
                 .small()
                 .color(MUTED),
         );
@@ -86,23 +89,23 @@ impl PropertiesUi {
             .count();
         if count == 0 {
             ui.add_space(12.0);
-            ui.label("This wallpaper has no customizable options.");
+            ui.label("Dieses Wallpaper hat keine anpassbaren Optionen.");
             return;
         }
         if count > 8 {
-            let label = ui.label(RichText::new("Find a setting").small().color(MUTED));
+            let label = ui.label(RichText::new("Einstellung finden").small().color(MUTED));
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .hint_text("Search wallpaper settings…")
+                    .hint_text("Einstellungen durchsuchen …")
                     .desired_width(ui.available_width()),
             )
             .labelled_by(label.id);
         }
         if count > 8 || !values.is_empty() || self.modified_only {
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.modified_only, "Changed only");
+                ui.checkbox(&mut self.modified_only, "Nur Änderungen");
                 ui.label(
-                    RichText::new(format!("{} changed", values.len()))
+                    RichText::new(format!("{} geändert", values.len()))
                         .small()
                         .color(MUTED),
                 );
@@ -181,12 +184,12 @@ impl PropertiesUi {
             ui.colored_label(
                 MUTED,
                 if self.modified_only {
-                    "No changed settings match this view."
+                    "Keine geänderten Einstellungen in dieser Ansicht."
                 } else {
-                    "No settings match your search."
+                    "Keine passenden Einstellungen gefunden."
                 },
             );
-            if ui.button("Show all settings").clicked() {
+            if ui.button("Alle Einstellungen anzeigen").clicked() {
                 self.search.clear();
                 self.modified_only = false;
             }
@@ -398,8 +401,14 @@ fn property_row(
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             reset = ui
-                .add_enabled(values.contains_key(key), egui::Button::new("Reset").small())
-                .on_hover_text(format!("Restore default: {}", default_value(property)))
+                .add_enabled(
+                    values.contains_key(key),
+                    egui::Button::new("Zurücksetzen").small(),
+                )
+                .on_hover_text(format!(
+                    "Standard wiederherstellen: {}",
+                    default_value(property)
+                ))
                 .clicked();
             ui.with_layout(
                 egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
@@ -448,7 +457,10 @@ fn property_row(
                 if precision == 0 {
                     slider = slider.integer();
                 }
-                if ui.add(slider).labelled_by(label_id).changed() {
+                if super::theme::slider(ui, slider)
+                    .labelled_by(label_id)
+                    .changed()
+                {
                     value = numeric.to_string();
                 }
             });
@@ -474,7 +486,7 @@ fn property_row(
                 .map(option_label)
                 .unwrap_or_else(|| {
                     if value.is_empty() {
-                        "Choose an option".into()
+                        "Option auswählen".into()
                     } else {
                         value.clone()
                     }
@@ -500,7 +512,7 @@ fn property_row(
                 if ui
                     .color_edit_button_srgb(&mut color)
                     .labelled_by(label_id)
-                    .on_hover_text("Choose a color")
+                    .on_hover_text("Farbe auswählen")
                     .changed()
                 {
                     value = color
@@ -513,7 +525,7 @@ fn property_row(
                     RichText::new(format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2]))
                         .monospace(),
                 );
-                ui.label(RichText::new("Click to edit").small().color(MUTED));
+                ui.label(RichText::new("Zum Bearbeiten klicken").small().color(MUTED));
             });
         }
         _ => {
@@ -525,9 +537,9 @@ fn property_row(
                             property_kind,
                             "file" | "directory" | "scenetexture" | "texture"
                         ) {
-                            "File or folder path"
+                            "Datei- oder Ordnerpfad"
                         } else {
-                            "Enter a value"
+                            "Wert eingeben"
                         },
                     ),
             )
@@ -537,9 +549,9 @@ fn property_row(
                 "file" | "directory" | "scenetexture" | "texture"
             ) && ui
                 .button(if property_kind == "directory" {
-                    "Choose folder…"
+                    "Ordner auswählen …"
                 } else {
-                    "Choose file…"
+                    "Datei auswählen …"
                 })
                 .clicked()
             {
@@ -550,7 +562,7 @@ fn property_row(
                 "textinput" | "file" | "directory" | "scenetexture" | "texture"
             ) {
                 ui.label(
-                    RichText::new(format!("Advanced value · {property_kind}"))
+                    RichText::new(format!("Erweiterter Wert · {property_kind}"))
                         .small()
                         .color(MUTED),
                 );
@@ -927,9 +939,9 @@ mod tests {
             render(vec![])
         };
         let changed = click(text_position(&initial, "Show clock"));
-        assert!(text_position(&changed, "1 changed").is_finite());
+        assert!(text_position(&changed, "1 geändert").is_finite());
         // The changed-only filter appears after the first edit; use fresh geometry.
-        let restored = click(text_position(&changed, "Reset"));
+        let restored = click(text_position(&changed, "Zurücksetzen"));
         assert!(text_position(&restored, "Show clock").is_finite());
         assert!(values.is_empty());
     }
@@ -975,7 +987,7 @@ mod tests {
                 },
                 |ctx| app.draw(ctx),
             );
-            let position = text_position(&output, "Apply to DP-1");
+            let position = text_position(&output, "Auf DP-1 anwenden");
             assert!(position.y < height - 40.0 && position.y > height * 0.5);
             assert!(position.x < width);
         }

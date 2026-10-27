@@ -1,5 +1,5 @@
 use super::playback::DisplayWallpaper;
-use super::{ACCENT, BG, BORDER, MUTED, PANEL, SURFACE, TEXT};
+use super::{ACCENT, BG, BORDER, MUTED, PANEL, SURFACE, TEXT, theme};
 use crate::desktop::Monitor;
 use eframe::egui::{self, RichText};
 use std::collections::BTreeMap;
@@ -8,6 +8,7 @@ use std::time::Instant;
 const OPEN_SECONDS: f32 = 0.22;
 
 pub(super) struct DisplayPicker {
+    pub previews: BTreeMap<String, egui::TextureHandle>,
     opened_at: Option<Instant>,
     startup_pending: bool,
     focus_pending: bool,
@@ -16,6 +17,7 @@ pub(super) struct DisplayPicker {
 impl Default for DisplayPicker {
     fn default() -> Self {
         Self {
+            previews: BTreeMap::new(),
             opened_at: None,
             startup_pending: true,
             focus_pending: false,
@@ -69,17 +71,17 @@ impl DisplayPicker {
         if progress < 1.0 {
             ctx.request_repaint();
         }
-        let width = (ctx.screen_rect().width() - 64.0).clamp(220.0, 560.0);
+        let width = (ctx.screen_rect().width() - 64.0).clamp(220.0, 756.0);
         let mut frame = egui::Frame::popup(&ctx.style())
-            .fill(BG.gamma_multiply(opacity))
+            .fill(PANEL.gamma_multiply(opacity))
             .stroke(egui::Stroke::new(1.0_f32, BORDER.gamma_multiply(opacity)))
-            .inner_margin(18.0)
-            .corner_radius(6.0);
+            .inner_margin(28.0)
+            .corner_radius(12.0);
         frame.shadow.color = frame.shadow.color.gamma_multiply(opacity);
         let area = egui::Modal::default_area(egui::Id::new("display_picker"))
             .anchor(
-                egui::Align2::CENTER_TOP,
-                egui::vec2(0.0, 16.0 - 24.0 * (1.0 - opacity)),
+                egui::Align2::CENTER_CENTER,
+                egui::vec2(0.0, -16.0 * (1.0 - opacity)),
             )
             .fade_in(false);
         let mut chosen = false;
@@ -87,30 +89,35 @@ impl DisplayPicker {
         let response = egui::Modal::new(egui::Id::new("display_picker"))
             .area(area)
             .frame(frame)
-            .backdrop_color(egui::Color32::from_black_alpha((120.0 * opacity) as u8))
+            .backdrop_color(egui::Color32::from_black_alpha((170.0 * opacity) as u8))
             .show(ctx, |ui| {
                 ui.set_width(width);
                 ui.set_opacity(opacity);
                 ui.horizontal(|ui| {
-                    ui.heading("Choose a display");
+                    ui.label(theme::heading("Deine Bildschirme", 26.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        close = ui.button("Close").clicked();
+                        close = ui.button("Schließen").clicked();
                     });
                 });
-                ui.colored_label(MUTED, "Select the screen you want to change.");
+                ui.colored_label(
+                    MUTED,
+                    "Wähle aus, welchen Bildschirm du gestalten möchtest.",
+                );
                 ui.add_space(12.0);
                 egui::ScrollArea::vertical()
                     .id_salt("display_picker_content")
                     .max_height((ctx.screen_rect().height() - 190.0).max(120.0))
                     .show(ui, |ui| {
                         if monitors.is_empty() {
-                            ui.label("Displays could not be detected on this desktop.");
-                            ui.label("Display connector");
+                            ui.label(
+                                "Bildschirme konnten auf diesem Desktop nicht erkannt werden.",
+                            );
+                            ui.label("Bildschirmanschluss");
                             ui.text_edit_singleline(output);
                             chosen = ui
                                 .add_enabled(
                                     !output.trim().is_empty(),
-                                    egui::Button::new("Use display"),
+                                    egui::Button::new("Bildschirm verwenden"),
                                 )
                                 .clicked();
                             return;
@@ -120,7 +127,7 @@ impl DisplayPicker {
                             egui::vec2(ui.available_width(), height),
                             egui::Sense::hover(),
                         );
-                        ui.painter().rect_filled(canvas, 4.0, PANEL);
+                        ui.painter().rect_filled(canvas, 8.0, BG);
                         let rects = display_rects(monitors, canvas.shrink(12.0));
                         let compact = rects.iter().any(|r| r.width() < 108.0 || r.height() < 66.0);
                         let overlapping = rects.iter().enumerate().any(|(i, rect)| {
@@ -155,7 +162,7 @@ impl DisplayPicker {
                                     assignments
                                         .get(&monitor.name)
                                         .map(|w| format!("{}: {}", w.state, w.title))
-                                        .unwrap_or_else(|| "No wallpaper set".into()),
+                                        .unwrap_or_else(|| "Kein Wallpaper zugewiesen".into()),
                                 ));
                             response.widget_info(|| {
                                 egui::WidgetInfo::selected(
@@ -180,6 +187,14 @@ impl DisplayPicker {
                                     5.0,
                                     egui::Stroke::new(2.0_f32, ACCENT),
                                     egui::StrokeKind::Outside,
+                                );
+                            }
+                            if let Some(texture) = self.previews.get(&monitor.name) {
+                                theme::image(ui, texture, rect.shrink(3.0), true);
+                                ui.painter().rect_filled(
+                                    rect.shrink(3.0),
+                                    6.0,
+                                    egui::Color32::from_black_alpha(100),
                                 );
                             }
                             let center = rect.center();
@@ -219,7 +234,7 @@ impl DisplayPicker {
                         }
                         self.focus_pending = false;
                         ui.add_space(10.0);
-                        ui.label(RichText::new("Wallpapers on your displays").strong());
+                        ui.label(RichText::new("Auf deinen Bildschirmen").strong());
                         for monitor in monitors {
                             ui.horizontal(|ui| {
                                 if ui
@@ -233,9 +248,15 @@ impl DisplayPicker {
                                     if let Some(current) = assignments.get(&monitor.name) {
                                         ui.add(egui::Label::new(&current.title).truncate())
                                             .on_hover_text(&current.title);
-                                        ui.label(RichText::new(current.state).small().color(MUTED));
+                                        ui.label(
+                                            RichText::new(theme::playback(current.state))
+                                                .small()
+                                                .color(MUTED),
+                                        );
                                     } else {
-                                        ui.label(RichText::new("No wallpaper set").color(MUTED));
+                                        ui.label(
+                                            RichText::new("Kein Wallpaper zugewiesen").color(MUTED),
+                                        );
                                     }
                                 });
                             });
@@ -260,14 +281,19 @@ impl DisplayPicker {
                         if monitors.iter().any(|m| m.x.is_none() || m.y.is_none()) {
                             ui.colored_label(
                                 MUTED,
-                                "Display positions unavailable; shown in a row.",
+                                "Bildschirmpositionen sind nicht verfügbar; Anzeige nebeneinander.",
                             );
                         }
                     });
                 ui.add_space(12.0);
+                ui.label(
+                    RichText::new("Das Wallpaper wendest du danach in der Bibliothek an.")
+                        .small()
+                        .color(MUTED),
+                );
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("Selected: {output}"))
+                        RichText::new(format!("Ausgewählt: {output}"))
                             .strong()
                             .color(ACCENT),
                     );
@@ -275,7 +301,7 @@ impl DisplayPicker {
                         if ui
                             .add_enabled(
                                 !output.is_empty(),
-                                egui::Button::new(RichText::new("Use selected display").color(BG))
+                                egui::Button::new(RichText::new("Bildschirm auswählen").color(BG))
                                     .fill(ACCENT),
                             )
                             .clicked()
@@ -404,6 +430,7 @@ mod tests {
     #[test]
     fn picker_shows_wallpaper_titles_and_playback_state_for_each_display() {
         let ctx = egui::Context::default();
+        crate::fonts::configure(&ctx);
         let monitors = monitors();
         let mut picker = DisplayPicker::default();
         picker.monitors_ready(&monitors);
@@ -453,9 +480,9 @@ mod tests {
         for text in [
             "Forest wallpaper",
             "Ocean wallpaper",
-            "Playing",
-            "Paused",
-            "No wallpaper set",
+            "Wird wiedergegeben",
+            "Pausiert",
+            "Kein Wallpaper zugewiesen",
         ] {
             assert!(
                 rendered
@@ -474,6 +501,7 @@ mod tests {
     #[test]
     fn clicking_a_monitor_selects_that_connector_and_refresh_does_not_reopen() {
         let ctx = egui::Context::default();
+        crate::fonts::configure(&ctx);
         let monitors = monitors();
         let mut picker = DisplayPicker::default();
         let mut output = "DP-2".to_string();
@@ -552,6 +580,7 @@ mod tests {
     #[test]
     fn keyboard_activation_chooses_the_focused_monitor_without_motion() {
         let ctx = egui::Context::default();
+        crate::fonts::configure(&ctx);
         ctx.style_mut(|style| style.animation_time = 0.0);
         let monitors = monitors();
         let mut picker = DisplayPicker::default();

@@ -58,7 +58,7 @@ impl App {
             return Some(DisplayWallpaper {
                 folder: state.wallpaper.clone(),
                 title: state.title.clone(),
-                state: if state.paused { "Paused" } else { "Playing" },
+                state: state.playback_label(),
             });
         }
         let assignment = self.config.assignments.get(output)?;
@@ -115,46 +115,170 @@ impl App {
     pub(super) fn current_wallpaper_banner(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let current = self.display_wallpaper(&self.output);
         egui::Frame::new()
-            .fill(PANEL)
-            .inner_margin(10.0)
-            .corner_radius(4.0)
+            .fill(Color32::from_rgb(28, 42, 57))
+            .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(51, 77, 105)))
+            .inner_margin(12.0)
+            .corner_radius(6.0)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(if self.output.is_empty() {
-                            "Choose a display"
+                    theme::icon(ui, Icon::Monitor, 18.0, ACCENT);
+                    if ui
+                        .link(if self.output.is_empty() {
+                            "Bildschirm auswählen"
                         } else {
                             &self.output
                         })
-                        .strong()
-                        .color(ACCENT),
-                    );
+                        .clicked()
+                    {
+                        self.display_picker.open();
+                    }
                     if let Some(current) = &current {
-                        ui.label(RichText::new(current.state).small().color(MUTED));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let available = self
-                                .scan
-                                .wallpapers
-                                .iter()
-                                .any(|w| w.matches_folder(&current.folder));
-                            if ui
-                                .add_enabled(available, egui::Button::new("Show wallpaper").small())
-                                .clicked()
-                            {
-                                self.select_display_wallpaper(ctx);
-                            }
-                        });
+                        let width = (ui.available_width() - 150.0).max(40.0);
+                        if ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(width, 20.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(width);
+                                    ui.add(
+                                        egui::Label::new(&current.title)
+                                            .truncate()
+                                            .sense(egui::Sense::click()),
+                                    )
+                                },
+                            )
+                            .inner
+                            .on_hover_text("Wallpaper in der Bibliothek anzeigen")
+                            .clicked()
+                        {
+                            self.select_display_wallpaper(ctx);
+                        }
+                        ui.label(
+                            RichText::new(theme::playback(current.state))
+                                .size(12.0)
+                                .color(theme::SUCCESS),
+                        );
+                    } else {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("Noch kein Wallpaper zugewiesen").color(MUTED),
+                            )
+                            .truncate(),
+                        );
                     }
                 });
-                if let Some(current) = &current {
-                    ui.add(egui::Label::new(RichText::new(&current.title).strong()).truncate())
-                        .on_hover_text(&current.title);
-                } else {
-                    ui.label(RichText::new("No wallpaper set on this display").color(MUTED));
+            });
+        ui.add_space(10.0);
+    }
+
+    pub(super) fn display_overview(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            ui.label(theme::heading("Auf deinen Bildschirmen", 14.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.link("Verwalten").clicked() {
+                    self.display_picker.open();
                 }
             });
-        ui.add_space(6.0);
+        });
+        ui.add_space(8.0);
+        let monitors = self.monitors.clone();
+        egui::ScrollArea::horizontal()
+            .id_salt("display_overview_scroll")
+            .max_height(76.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let card_width = if monitors.len() <= 2 {
+                        (ui.available_width() - 12.0 * monitors.len().saturating_sub(1) as f32)
+                            / monitors.len().max(1) as f32
+                    } else {
+                        260.0
+                    };
+                    for monitor in monitors {
+                        let current = self.display_wallpaper(&monitor.name);
+                        let wallpaper = current
+                            .as_ref()
+                            .and_then(|c| {
+                                self.scan
+                                    .wallpapers
+                                    .iter()
+                                    .find(|w| w.matches_folder(&c.folder))
+                            })
+                            .cloned();
+                        let selected = self.output == monitor.name;
+                        let response = ui.add_sized(
+                            [card_width.max(210.0), 68.0],
+                            egui::Button::new("")
+                                .fill(if selected { theme::ACTIVE } else { PANEL })
+                                .stroke(egui::Stroke::new(
+                                    1.0_f32,
+                                    if selected { ACCENT } else { BORDER },
+                                )),
+                        );
+                        response.widget_info(|| {
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::Button,
+                                true,
+                                selected,
+                                format!("Bildschirm {}", monitor.name),
+                            )
+                        });
+                        let r = response.rect;
+                        let preview = egui::Rect::from_min_size(
+                            r.min + egui::vec2(10.0, 12.0),
+                            egui::vec2(76.0, 44.0),
+                        );
+                        if let Some(wallpaper) = &wallpaper {
+                            if let Some(path) = &wallpaper.preview {
+                                self.thumbnail(path, ctx);
+                            }
+                            self.paint_preview(ui, wallpaper, preview, true);
+                        } else {
+                            theme::paint_icon(
+                                ui,
+                                egui::Rect::from_center_size(
+                                    preview.center(),
+                                    egui::vec2(24.0, 24.0),
+                                ),
+                                Icon::Monitor,
+                                MUTED,
+                            );
+                        }
+                        ui.painter().text(
+                            r.min + egui::vec2(98.0, 14.0),
+                            egui::Align2::LEFT_TOP,
+                            &monitor.name,
+                            egui::FontId::proportional(12.0),
+                            if selected { ACCENT } else { MUTED },
+                        );
+                        let title = current
+                            .as_ref()
+                            .map(|c| c.title.as_str())
+                            .unwrap_or("Kein Wallpaper");
+                        let mut job = egui::text::LayoutJob::simple(
+                            title.into(),
+                            egui::FontId::proportional(13.0),
+                            TEXT,
+                            (r.width() - 112.0).max(70.0),
+                        );
+                        job.wrap.max_rows = 1;
+                        let galley = ui.fonts(|f| f.layout_job(job));
+                        ui.painter()
+                            .galley(r.min + egui::vec2(98.0, 35.0), galley, TEXT);
+                        if response
+                            .on_hover_text(
+                                current
+                                    .map(|c| format!("{} · {}", c.title, theme::playback(c.state)))
+                                    .unwrap_or_else(|| "Bildschirm auswählen".into()),
+                            )
+                            .clicked()
+                        {
+                            self.output = monitor.name;
+                            self.select_display_wallpaper(ctx);
+                        }
+                    }
+                });
+            });
     }
 
     /// Shared by the Apply button, window preview and tile double-click.
@@ -324,6 +448,9 @@ mod tests {
             title: current.title.clone(),
             wallpaper: current.folder.clone(),
             paused: false,
+            auto_pause: None,
+            auto_paused: None,
+            pause_supported: true,
             pid: 1,
             log: dir.path().join("log"),
         };
@@ -458,8 +585,12 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(texts.iter().any(|text| text == "Saved for DP-2"));
-        assert!(texts.iter().any(|text| text.contains("Set on DP-1, DP-2")));
+        assert!(texts.iter().any(|text| text == "Gespeichert für DP-2"));
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Auf DP-1, DP-2 eingerichtet"))
+        );
         assert!(!app.busy);
     }
 

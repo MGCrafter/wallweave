@@ -90,6 +90,30 @@ Beim Start erscheint ab 0.2.3 oben eine animierte Monitorauswahl mit der tatsäc
 
 Damit lässt sich unterscheiden, ob Browser-APIs, SceneScript, der Szenenrenderer oder die Desktop-Anbindung fehlen. Genau diese Beispiele sind die Grundlage für die nächsten Kompatibilitätsänderungen.
 
+## Automatische Pause für Apps und Spiele
+
+Unter **Einstellungen → Wiedergabe → Automatisch pausieren** stehen drei Regeln zur Wahl:
+
+- **Wenn eine App im Fokus ist**: pausieren bei einer fokussierten App, einem Vollbildspiel oder einem maximierten Fenster.
+- **Nur bei Vollbild oder maximierten Apps**: normale Fenster lösen keine Pause aus.
+- **Nie automatisch pausieren** (Standard): diese automatische Pause ausschalten.
+
+Die manuelle Pause und die Hyprland-Automatik benötigen einen Renderer mit `--pause-control-file` (siehe [Build-Anleitung](USAGE.md#automatic-performance-pause)). Ein älterer Renderer läuft unter Hyprland ohne Automatik weiter; manuelle Pause wird abgewiesen. Ganze Renderer-Prozesse werden nicht mehr eingefroren, damit Audio-Threads weiterarbeiten. Die gespeicherte Einstellung bleibt bei Updates erhalten.
+
+Unter Hyprland prüft der Supervisor alle 250 ms die sichtbaren Arbeitsflächen pro Monitor. Das Ausblenden einer Sonderarbeitsfläche (zum Beispiel mit Super+M oder Super+S) gibt die automatische Pause wieder frei. Schlägt die Erkennung fehl, werden nur automatische Pausen aufgehoben. Auf anderen Desktops übernimmt die native Renderer-Erkennung. Beides funktioniert auch bei geschlossenem Wallweave-Fenster. Bei normalen Fenstern zählt der Fokus, nicht jedes teilweise überlappende Fenster. Die Fenstervorschau bleibt unabhängig. Eine manuelle Pause bleibt bestehen, bis du selbst **Resume** drückst; anschließend gelten wieder die automatischen Regeln.
+
+**Änderungen speichern** startet die betroffenen Wallpaper mit der neuen Regel neu. Einstellungen und manuelle Pausen bleiben erhalten. Bei einem fehlgeschlagenen Start bleibt der alte Renderer aktiv. **Activity** zeigt unter Hyprland auch **Paused automatically** an. Bei nativer Renderer-Erkennung auf anderen Desktops ist nur die gewählte Regel bekannt.
+
+Zum Prüfen ein normales Fenster fokussieren, Vollbild ein-/ausschalten und auf einen leeren Desktop wechseln. Andere Monitore und eine laufende Vorschau mitprüfen. Danach manuell pausieren, die Regel ändern und kontrollieren, dass die manuelle Pause erhalten bleibt.
+
+```sh
+./run.sh config auto-pause focused
+./run.sh config auto-pause fullscreen
+./run.sh config auto-pause off
+```
+
+Ein alter, noch laufender Supervisor muss nach dem Update einmal mit `./run.sh shutdown` beendet werden. Beim erneuten Öffnen stellt Wallweave die gespeicherten Wallpaper mit der neuen Regel wieder her. Die separate Datei `auto-pause.json` im Wallweave-Zustandsordner hält die bisherige `config.toml` kompatibel.
+
 ## 6. Alles beenden
 
 ```sh
