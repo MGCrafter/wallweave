@@ -85,7 +85,9 @@ while True:
         if paused != previous:
             print('CONTROL paused' if paused else 'CONTROL playing', flush=True)
             previous = paused
-        control.with_name('heartbeat').write_text(str(count))
+        heartbeat = control.with_name('heartbeat.tmp')
+        heartbeat.write_text(str(count))
+        heartbeat.replace(control.with_name('heartbeat'))
     count += 1
     time.sleep(.03)
 "#,
@@ -1646,12 +1648,18 @@ fn wait_control(state: &service::RunState, paused: bool) {
     assert_eq!(control_paused(state), paused);
     let path = control_path(state).with_file_name("heartbeat");
     let before = fs::read_to_string(&path).expect("heartbeat");
-    thread::sleep(Duration::from_millis(140));
-    let after = fs::read_to_string(path).expect("heartbeat after pause");
-    assert_ne!(
-        before, after,
-        "Renderer callbacks must continue during pause"
-    );
+    let started = Instant::now();
+    loop {
+        let after = fs::read_to_string(&path).expect("heartbeat after pause");
+        if before != after {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Renderer callbacks must continue during pause"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
     let log = service::tail(&state.log, 4000);
     let last = log.lines().rfind(|line| line.starts_with("CONTROL "));
     assert_eq!(
