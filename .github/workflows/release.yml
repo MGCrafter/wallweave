@@ -24,6 +24,7 @@ jobs:
       - name: Validate
         run: |
           cargo fmt --check
+          python3 scripts/test-renderer-installer.py
           cargo test --locked --all-targets
           cargo clippy --locked --all-targets -- -D warnings
           cargo check --locked --no-default-features
@@ -49,7 +50,12 @@ jobs:
       - name: Package Linux release
         run: python3 scripts/package-linux.py --linuxdeploy dist/tools/linuxdeploy-x86_64.AppImage
       - name: Smoke-test packaged application
-        run: python3 scripts/test-linux-package.py
+        run: |
+          mkdir -p dist/previous
+          curl -fL --retry 3 -o dist/previous/wallweave-0.2.4-linux-x86_64.tar.gz https://github.com/MGCrafter/wallweave/releases/download/v0.2.4/wallweave-0.2.4-linux-x86_64.tar.gz
+          curl -fL --retry 3 -o dist/previous/SHA256SUMS https://github.com/MGCrafter/wallweave/releases/download/v0.2.4/SHA256SUMS
+          (cd dist/previous && sha256sum --ignore-missing -c SHA256SUMS)
+          python3 scripts/test-linux-package.py --previous-archive dist/previous/wallweave-0.2.4-linux-x86_64.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: wallweave-linux-x86_64
@@ -115,5 +121,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          (cd dist && sha256sum *.tar.gz *.AppImage *.pkg.tar.zst install-renderer.py PKGBUILD > SHA256SUMS)
-          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*.AppImage dist/*.pkg.tar.zst dist/install-renderer.py dist/PKGBUILD dist/SHA256SUMS --verify-tag --title "Wallweave $RELEASE_TAG · Linux" --notes-file docs/RELEASE.md --latest
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release download "$RELEASE_TAG" --pattern 'wallweave-renderer-*.tar.gz' --dir dist/renderer
+          python3 - <<'PY'
+          import hashlib, importlib.util
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('installer', 'scripts/install-renderer.py')
+          installer = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(installer)
+          runtime = Path('dist/renderer') / installer.ASSET
+          assert hashlib.sha256(runtime.read_bytes()).hexdigest() == installer.DIGEST
+          assert Path('dist/renderer/wallweave-renderer-v0.9.4-pause1-sources.tar.gz').is_file()
+          files = sorted(p for p in Path('dist').rglob('*') if p.is_file() and p.name != 'SHA256SUMS')
+          assert len({p.name for p in files}) == len(files), 'Duplicate release asset names'
+          Path('dist/SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in files))
+          PY
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*.AppImage dist/*.pkg.tar.zst dist/install-renderer.py dist/PKGBUILD dist/SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --verify-tag --draft=false --title "Wallweave $RELEASE_TAG · Linux" --notes-file docs/RELEASE.md --latest

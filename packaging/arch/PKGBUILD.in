@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc='Native Linux desktop app for existing Wallpaper Engine libraries'
 arch=('x86_64')
 url='https://github.com/MGCrafter/wallweave'
-license=('MIT' 'OFL-1.1' 'LicenseRef-Valve-Steamworks')
+license=('MIT' 'ISC' 'OFL-1.1' 'LicenseRef-Valve-Steamworks')
 depends=('glibc>=2.35' 'gcc-libs' 'libxkbcommon' 'wayland' 'libglvnd' 'libx11' 'libxcursor' 'libxi' 'libxrandr' 'dbus')
 optdepends=('steam: Workshop browsing and downloads'
             'python: optional renderer installer'

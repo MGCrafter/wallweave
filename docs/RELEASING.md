@@ -4,13 +4,30 @@ The release pipeline builds on Ubuntu 22.04 (glibc 2.35) and packages a native A
 
 ## Automated release
 
-1. Update `Cargo.toml`, `Cargo.lock`, versioned download examples and `docs/RELEASE.md`.
-2. Run the normal Rust checks and review the changes.
-3. Push an annotated `v<package-version>` tag, for example `v0.2.4`.
+1. Build/test the portable cooperative renderer as below. Pin its SHA-256 and target release URL in `scripts/install-renderer.py`.
+2. Update `Cargo.toml`, `Cargo.lock`, versioned download examples and `docs/RELEASE.md`.
+3. Run the normal Rust and installer checks, review and commit the changes.
+4. Create a **draft** `v<package-version>` release with the renderer binary and matching source archives attached. Keep it unpublished until the app/package checks finish.
+5. Push an annotated `v<package-version>` tag at the reviewed commit, for example `v0.2.5`.
 
-`.github/workflows/release.yml` verifies the tag, runs the tests and builds the app with its Steamworks runtime. It downloads a pinned, hash-verified linuxdeploy, generates the AppImage, archive, renderer installer, `PKGBUILD` and checksums, and runs package smoke tests. A second job uses the official Arch Linux base-devel container to build a `.pkg.tar.zst`, install it with pacman, check the installed CLI and remove it again. Only after both jobs pass is a public GitHub Release published with all assets and combined checksums.
+`.github/workflows/release.yml` verifies the tag, runs the tests and builds the app with its Steamworks runtime. It downloads a pinned, hash-verified linuxdeploy, generates the AppImage, archive, renderer installer, `PKGBUILD` and checksums, and runs package smoke tests including an upgrade from the published v0.2.4 archive. A second job uses the official Arch Linux base-devel container to build a `.pkg.tar.zst`, install it with pacman, check the installed CLI and remove it again. The publishing job requires an existing draft, verifies the attached renderer against the installer's pinned digest and requires its matching source archive. Only after both jobs pass does it upload the app files, calculate combined checksums and publish the draft. An already published release is never overwritten by the workflow.
 
 `workflow_dispatch` builds and tests artifacts without publishing a release. Rust CI runs for pushes and pull requests as well.
+
+## Portable cooperative renderer
+
+The Debian 12 build uses the pinned engine revision in `scripts/build-pause-renderer.py` and its upstream portable packaging tools. The latter bundle non-system libraries and enforce a glibc 2.35 floor. The packaging script also collects exact matching Debian dependency sources and copyright notices; `deb-src` repositories are enabled in the build image.
+
+```sh
+docker build -f packaging/renderer.Dockerfile -t wallweave-renderer-release:debian12 packaging
+docker run --rm -v "$PWD:/work" wallweave-renderer-release:debian12 sh -c '
+  python3 scripts/build-pause-renderer.py --source runtime/release-build/source --build runtime/release-build/build --jobs 4 &&
+  python3 scripts/package-pause-renderer.py --source runtime/release-build/source --build runtime/release-build/build'
+```
+
+The outputs in `dist/renderer-release/` are the runtime and corresponding source archives. Check the runtime using upstream `tools/smoke_test_release.sh` in a clean Ubuntu 22.04 environment, then run `scripts/check-pause-renderer.py` in isolation for native pause/resume, lease expiry and independent audio. `packaging/renderer-smoke.Dockerfile` supplies that test environment. Do not ship a locally compiled Arch renderer as the generic Linux release.
+
+For a rebuilt runtime, update the archive/version name rather than silently replacing an already published pinned download. Keep the binary and its corresponding sources together in the draft release.
 
 ## Build the portable archive locally
 

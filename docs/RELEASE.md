@@ -1,53 +1,46 @@
-Wallweave's first public Linux release brings a native Rust desktop app to existing Wallpaper Engine libraries.
+Wallweave v0.2.5 adds the redesigned German interface and fixes automatic wallpaper pause/resume on Hyprland, including special workspaces. Pausing now uses a cooperative renderer control instead of stopping renderer processes, so audio threads keep running.
 
 ### Downloads
 
 | File | Use |
 | --- | --- |
-| `wallweave-0.2.4-1-x86_64.pkg.tar.zst` | Native Arch Linux / EndeavourOS / CachyOS package (`pacman -U`). |
-| `PKGBUILD` | Checksum-pinned recipe to build the native package with `makepkg -si`. |
-| `Wallweave-0.2.4-x86_64.AppImage` | Single-file app. Make executable and run. |
-| `wallweave-0.2.4-linux-x86_64.tar.gz` | Portable folder with optional user installer and application-menu entry. |
-| `install-renderer.py` | Optional pinned, SHA-256-verified renderer installer. |
-| `SHA256SUMS` | SHA-256 checksums for the release files. |
+| `wallweave-0.2.5-1-x86_64.pkg.tar.zst` | Arch Linux / EndeavourOS / CachyOS package. |
+| `Wallweave-0.2.5-x86_64.AppImage` | Make executable and run. |
+| `wallweave-0.2.5-linux-x86_64.tar.gz` | Portable app with optional user installer. |
+| `PKGBUILD` | Checksum-pinned Arch package recipe. |
+| `install-renderer.py` | Installs and configures the new renderer without compiling. |
+| `wallweave-renderer-v0.9.4-pause1-linux-x86_64.tar.gz` | Portable renderer with the pause fix; the installer downloads this automatically. |
+| `wallweave-renderer-v0.9.4-pause1-sources.tar.gz` | Matching renderer and dependency sources, build recipes and licenses. |
+| `SHA256SUMS` | Checksums for all release downloads. |
 
-Built on Ubuntu 22.04 for Linux x86_64 with glibc 2.35 or newer. The Steamworks runtime and CJK font are included. Wallpaper Engine, Workshop content and the renderer are supplied separately.
+Linux x86_64, glibc 2.35 or newer. Wallpaper Engine assets and Workshop content are supplied by the user. The app and renderer are separate downloads.
 
-### Install
+### Update from v0.2.4
 
-On Arch Linux, EndeavourOS or CachyOS:
+Close the GUI and run `wallweave shutdown` (or launch the old AppImage with `shutdown`). Then update your app:
 
-```sh
-sudo pacman -U ./wallweave-0.2.4-1-x86_64.pkg.tar.zst
-wallweave
-```
+- Arch/CachyOS: `sudo pacman -U ./wallweave-0.2.5-1-x86_64.pkg.tar.zst`
+- AppImage: download the new file, then `chmod +x Wallweave-0.2.5-x86_64.AppImage`.
+- User installation: extract the new portable archive and run `python3 install.py` again.
 
-For AppImage:
-
-```sh
-chmod +x Wallweave-0.2.4-x86_64.AppImage
-./Wallweave-0.2.4-x86_64.AppImage
-```
-
-Or extract the archive and install for your user without sudo:
+**Also update the renderer for the pause fix.** Download this release's `install-renderer.py`, then:
 
 ```sh
-tar -xzf wallweave-0.2.4-linux-x86_64.tar.gz
-cd wallweave-0.2.4-linux-x86_64
-python3 install.py
+python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer" --configure wallweave
 ```
 
-See the [installation guide](https://github.com/MGCrafter/wallweave/blob/main/docs/INSTALL.md) for the renderer, Steam setup, updating, uninstalling and FUSE-free launch.
+For AppImage use `--configure ./Wallweave-0.2.5-x86_64.AppImage`. If the user launcher is not on `PATH`, use `--configure "$HOME/.local/bin/wallweave"`.
 
-### Included
+Reopen Wallweave. Settings, favorites and wallpaper assignments are retained. The existing auto-pause preference is preserved; choose **Einstellungen → Wiedergabe → Automatisch pausieren** to enable focus or fullscreen pause. New installations default to automatic pause off. Older renderer folders are kept.
 
-- Searchable thumbnail library, favorites and sorting by actual Steam subscription date.
-- Native Steam Workshop browsing, subscriptions, download queue and recovery of missing downloads.
-- Animated monitor picker, per-display wallpapers and double-click to apply.
-- Wallpaper customization with sliders, colors, checkboxes and grouped settings.
-- Saved assignments restored when opening the app; wallpapers keep running when the GUI closes.
-- CLI diagnostics, per-output logs and pause/resume/stop controls.
+[Deutsche Update-Anleitung](https://github.com/MGCrafter/wallweave/blob/v0.2.5/docs/INSTALL.de.md#aktualisieren-und-entfernen) · [English installation guide](https://github.com/MGCrafter/wallweave/blob/v0.2.5/docs/INSTALL.md)
 
-Hyprland has received desktop playback testing. Other desktop integrations and individual wallpaper scripts depend on the renderer; see [validation and known limits](https://github.com/MGCrafter/wallweave/blob/main/docs/VALIDATION.md). This remains early software, with no guarantee that every Wallpaper Engine project works.
+### Changes and validation
 
-The release pipeline runs the Rust test suite, formatting, Clippy, a CLI-only build check and isolated package smoke tests before publishing. AppImage checks include keeping the supervisor alive after the launcher exits. No real wallpaper is applied by the automated checks.
+- Redesigned library, Workshop, monitor selection and settings, with bundled IBM Plex and Lucide fonts.
+- Automatic pause respects the visible normal/special workspace on each Hyprland output and resumes when the condition ends.
+- Manual and automatic pauses remain independent. Expired renderer control releases pause after about three seconds.
+- Renderer installer verifies its pinned checksum and cooperative-pause support before selecting a new runtime; failed upgrades retain the previous selection.
+- Rust tests, formatting, Clippy, CLI-only build and package checks run before publication. Upgrade tests install over v0.2.4 and verify saved state is unchanged. The Arch package is built, installed and removed in a clean container.
+
+The real renderer's pause/resume and independent audio were exercised in an isolated session. This is not a benchmark or a guarantee for every wallpaper, audio backend or game. Hyprland received desktop testing; KDE/GNOME behavior still depends on the renderer integration. See [validation](https://github.com/MGCrafter/wallweave/blob/v0.2.5/docs/VALIDATION.md).

@@ -15,10 +15,10 @@ Hyprland has received desktop playback testing. Other compositors and GNOME's re
 
 ## Arch Linux, EndeavourOS and CachyOS
 
-Download `wallweave-0.2.4-1-x86_64.pkg.tar.zst` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest), then:
+Download `wallweave-0.2.5-1-x86_64.pkg.tar.zst` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest), then:
 
 ```sh
-sudo pacman -U ./wallweave-0.2.4-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wallweave-0.2.5-1-x86_64.pkg.tar.zst
 wallweave
 ```
 
@@ -50,38 +50,38 @@ Personal settings, logs, Steam content and separately installed renderers remain
 
 ## Option A: AppImage
 
-1. Download `Wallweave-0.2.4-x86_64.AppImage` from [the latest release](https://github.com/MGCrafter/wallweave/releases/latest).
+1. Download `Wallweave-0.2.5-x86_64.AppImage` from [the latest release](https://github.com/MGCrafter/wallweave/releases/latest).
 2. Keep it in a stable location, such as `~/Applications`.
 3. Make it executable and open it:
 
 ```sh
-chmod +x Wallweave-0.2.4-x86_64.AppImage
-./Wallweave-0.2.4-x86_64.AppImage
+chmod +x Wallweave-0.2.5-x86_64.AppImage
+./Wallweave-0.2.5-x86_64.AppImage
 ```
 
 The same file accepts CLI commands, for example:
 
 ```sh
-./Wallweave-0.2.4-x86_64.AppImage doctor
+./Wallweave-0.2.5-x86_64.AppImage doctor
 ```
 
 If your distribution does not provide FUSE 2, use the runtime's built-in extraction mode:
 
 ```sh
-./Wallweave-0.2.4-x86_64.AppImage --appimage-extract-and-run
+./Wallweave-0.2.5-x86_64.AppImage --appimage-extract-and-run
 # With a CLI command:
-./Wallweave-0.2.4-x86_64.AppImage --appimage-extract-and-run doctor
+./Wallweave-0.2.5-x86_64.AppImage --appimage-extract-and-run doctor
 ```
 
 On first launch the app keeps a versioned copy under `${XDG_CACHE_HOME:-~/.cache}/wallweave/appimage/`. The supervisor uses this copy so wallpapers can continue after the AppImage launcher and GUI exit. Keep that cache while wallpapers are running. AppImage does not install a menu entry automatically; use Option B if you want the included menu installer.
 
 ## Option B: Portable archive / user installation
 
-Download `wallweave-0.2.4-linux-x86_64.tar.gz` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest), then:
+Download `wallweave-0.2.5-linux-x86_64.tar.gz` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest), then:
 
 ```sh
-tar -xzf wallweave-0.2.4-linux-x86_64.tar.gz
-cd wallweave-0.2.4-linux-x86_64
+tar -xzf wallweave-0.2.5-linux-x86_64.tar.gz
+cd wallweave-0.2.5-linux-x86_64
 ./run.sh
 ```
 
@@ -114,10 +114,10 @@ For the pinned portable renderer, download `install-renderer.py` from the Wallwe
 python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer"
 ```
 
-The installer downloads **WallpaperEngineLover/linux-wallpaperengine-kde v0.9.4**, about **267 MB**, checks its pinned SHA-256 and prints the launcher path. It does not apply a wallpaper or enable autostart. Select the printed launcher in **Settings → Renderer**, or configure it from the installed CLI:
+The installer downloads **linux-wallpaperengine-kde v0.9.4 with Wallweave's cooperative-pause patch**, checks its pinned SHA-256 and prints the launcher path. It does not apply a wallpaper or enable autostart. Select the printed launcher in **Einstellungen → Dateien & Renderer → Renderer**, or configure it from the installed CLI:
 
 ```sh
-wallweave config renderer "$HOME/.local/share/wallweave/renderer/v0.9.4/linux-wallpaperengine-kde-portable-x86_64/linux-wallpaperengine"
+wallweave config renderer "$HOME/.local/share/wallweave/renderer/v0.9.4-wallweave-pause1/wallweave-renderer-v0.9.4-pause1-linux-x86_64/linux-wallpaperengine"
 wallweave doctor
 ```
 
@@ -165,7 +165,15 @@ Quit the GUI and run `wallweave shutdown` using the old installation first. This
 - **User installation:** extract the new archive and run its `python3 install.py` again.
 - **Portable folder:** use the freshly extracted folder, keeping its binary and runtime together.
 
-Settings, favorites, download queue and renderer configuration are retained. Do not delete your renderer directory during an app update.
+Settings, favorites, download queue and wallpaper assignments are retained. Do not delete your renderer directory during an app update.
+
+**When updating from v0.2.4 to v0.2.5**, also install the cooperative renderer for the pause fix. Download the new release's `install-renderer.py`, then run while Wallweave is closed and its supervisor is stopped:
+
+```sh
+python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer" --configure wallweave
+```
+
+Use `--configure "$HOME/.local/bin/wallweave"` if the user launcher is not on `PATH`, or `--configure ./Wallweave-0.2.5-x86_64.AppImage` for AppImage. The installer verifies the pinned digest and pause capability, preserves the older renderer directory and selects the new executable in Wallweave. No compilation is required. Reopen Wallweave to restore assignments; existing auto-pause preferences are retained. Enable the desired rule under **Einstellungen → Wiedergabe**. There is no automatic app updater yet.
 
 ## Uninstall
 

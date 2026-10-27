@@ -15,10 +15,10 @@ Die Wiedergabe wurde unter Hyprland geprüft. Andere Desktop-Umgebungen sind noc
 
 ## Arch Linux, EndeavourOS und CachyOS
 
-Die Datei `wallweave-0.2.4-1-x86_64.pkg.tar.zst` aus [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen:
+Die Datei `wallweave-0.2.5-1-x86_64.pkg.tar.zst` aus [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen:
 
 ```sh
-sudo pacman -U ./wallweave-0.2.4-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wallweave-0.2.5-1-x86_64.pkg.tar.zst
 wallweave
 ```
 
@@ -29,7 +29,7 @@ sudo pacman -S --needed python
 python3 /usr/share/wallweave/install-renderer.py --directory "$HOME/.local/share/wallweave/renderer"
 ```
 
-Den ausgegebenen Programmpfad in **Settings → Renderer** auswählen. Für den Workshop muss der native Steam-Client laufen; Steam ist unter Arch nach Aktivierung des multilib-Repositories über `sudo pacman -S steam` installierbar. Du benötigst weiterhin Wallpaper Engine und dessen Assets.
+Den ausgegebenen Programmpfad in **Einstellungen → Dateien & Renderer → Renderer** auswählen. Für den Workshop muss der native Steam-Client laufen; Steam ist unter Arch nach Aktivierung des multilib-Repositories über `sudo pacman -S steam` installierbar. Du benötigst weiterhin Wallpaper Engine und dessen Assets.
 
 Alternativ das `PKGBUILD` aus demselben Release in einen leeren Ordner herunterladen, prüfen und das native Paket selbst erstellen:
 
@@ -53,34 +53,34 @@ Persönliche Einstellungen, Logs, Steam-Dateien und separat installierte Rendere
 
 ## AppImage: herunterladen und starten
 
-Die Datei `Wallweave-0.2.4-x86_64.AppImage` unter [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen, beispielsweise in `~/Applications` ablegen und starten:
+Die Datei `Wallweave-0.2.5-x86_64.AppImage` unter [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen, beispielsweise in `~/Applications` ablegen und starten:
 
 ```sh
-chmod +x Wallweave-0.2.4-x86_64.AppImage
-./Wallweave-0.2.4-x86_64.AppImage
+chmod +x Wallweave-0.2.5-x86_64.AppImage
+./Wallweave-0.2.5-x86_64.AppImage
 ```
 
 Falls eine FUSE-Fehlermeldung erscheint:
 
 ```sh
-./Wallweave-0.2.4-x86_64.AppImage --appimage-extract-and-run
+./Wallweave-0.2.5-x86_64.AppImage --appimage-extract-and-run
 ```
 
 Auch CLI-Befehle funktionieren direkt über die Datei:
 
 ```sh
-./Wallweave-0.2.4-x86_64.AppImage doctor
+./Wallweave-0.2.5-x86_64.AppImage doctor
 ```
 
 Die App legt beim ersten Start eine versionsbezogene Kopie unter `~/.cache/wallweave/appimage/` an. Dadurch können Wallpaper weiterlaufen, wenn das AppImage und die Oberfläche geschlossen werden. Bei gesetztem `XDG_CACHE_HOME` liegt der Cache dort. Für einen automatisch installierten Menüeintrag die Archiv-Variante verwenden.
 
 ## Archiv: optional mit Eintrag im Anwendungsmenü
 
-Die Datei `wallweave-0.2.4-linux-x86_64.tar.gz` aus demselben Release herunterladen:
+Die Datei `wallweave-0.2.5-linux-x86_64.tar.gz` aus demselben Release herunterladen:
 
 ```sh
-tar -xzf wallweave-0.2.4-linux-x86_64.tar.gz
-cd wallweave-0.2.4-linux-x86_64
+tar -xzf wallweave-0.2.5-linux-x86_64.tar.gz
+cd wallweave-0.2.5-linux-x86_64
 python3 install.py
 ```
 
@@ -98,12 +98,12 @@ Falls `wallweave` im Terminal nicht gefunden wird, `~/.local/bin/wallweave` verw
 python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer"
 ```
 
-Das Skript lädt den festgelegten Renderer **v0.9.4** herunter, etwa **267 MB**, und prüft seine SHA-256-Prüfsumme. Es zeigt anschließend den Pfad zur ausführbaren Datei. Diesen unter **Settings → Renderer** auswählen. Es wird dabei noch kein Wallpaper gestartet.
+Das Skript lädt den festgelegten Renderer **v0.9.4 mit Wallweaves Auto-Pause-Fix** herunter und prüft seine SHA-256-Prüfsumme. Es zeigt anschließend den Pfad zur ausführbaren Datei. Diesen unter **Einstellungen → Dateien & Renderer → Renderer** auswählen. Es wird dabei noch kein Wallpaper gestartet.
 
 Bei einer Archiv-Installation lässt sich derselbe Renderer auch über die CLI konfigurieren:
 
 ```sh
-~/.local/bin/wallweave config renderer "$HOME/.local/share/wallweave/renderer/v0.9.4/linux-wallpaperengine-kde-portable-x86_64/linux-wallpaperengine"
+~/.local/bin/wallweave config renderer "$HOME/.local/share/wallweave/renderer/v0.9.4-wallweave-pause1/wallweave-renderer-v0.9.4-pause1-linux-x86_64/linux-wallpaperengine"
 ~/.local/bin/wallweave doctor
 ```
 
@@ -140,9 +140,19 @@ Vor einem Update oder dem Entfernen die Oberfläche schließen und den bisherige
 ~/.local/bin/wallweave shutdown
 ```
 
-Beim AppImage entsprechend `./Wallweave-0.2.4-x86_64.AppImage shutdown` verwenden.
+Beim AppImage entsprechend `./Wallweave-0.2.5-x86_64.AppImage shutdown` verwenden.
 
-**Update:** Neues AppImage herunterladen und ausführbar machen oder das neue Archiv entpacken und erneut `python3 install.py` ausführen. Einstellungen und Renderer bleiben erhalten.
+**App aktualisieren:** Neues AppImage herunterladen und ausführbar machen oder das neue Archiv entpacken und erneut `python3 install.py` ausführen. Beim Arch-Paket `sudo pacman -U ./wallweave-0.2.5-1-x86_64.pkg.tar.zst` verwenden. Einstellungen, Favoriten und gespeicherte Wallpaper bleiben erhalten.
+
+**Zusätzlich beim Update von v0.2.4 auf v0.2.5:** Den neuen Renderer installieren, damit der Auto-Pause-Fix verfügbar ist. `install-renderer.py` aus dem neuen Release herunterladen:
+
+```sh
+python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer" --configure wallweave
+```
+
+Bei einer Benutzerinstallation ohne passenden `PATH` hinter `--configure` den Pfad `"$HOME/.local/bin/wallweave"` angeben. Beim AppImage stattdessen `--configure ./Wallweave-0.2.5-x86_64.AppImage` verwenden. Du musst nichts selbst kompilieren. Der Installer prüft die SHA-256-Prüfsumme und die Pause-Unterstützung, erhält den bisherigen Renderer und setzt den neuen Programmpfad in Wallweave.
+
+Danach Wallweave öffnen. Die Wallpaper-Zuweisungen werden wiederhergestellt. Die bisherige Auto-Pause-Einstellung bleibt erhalten; zum Einschalten **Einstellungen → Wiedergabe → Automatisch pausieren** öffnen. Ein automatischer App-Updater ist noch nicht enthalten.
 
 **Archiv-Installation entfernen:**
 

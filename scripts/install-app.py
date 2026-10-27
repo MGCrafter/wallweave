@@ -56,7 +56,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix=".wallweave-install-", dir=app.parent) as temporary:
         staged = Path(temporary) / "app"
         staged.mkdir()
-        for name in ("bin", "run.sh", "scripts", "packaging", "docs", "licenses", "LICENSE", "README.md", "examples"):
+        for name in ("bin", "run.sh", "scripts", "patches", "tests", "packaging", "docs", "licenses", "LICENSE", "README.md", "examples"):
             item = source / name
             if item.is_dir():
                 shutil.copytree(item, staged / name, ignore=shutil.ignore_patterns("__pycache__"))

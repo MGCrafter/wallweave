@@ -14,14 +14,16 @@ The separately downloaded renderer is not part of Wallweave's source repository:
 
 - Source: https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde
 - Pinned release: https://github.com/WallpaperEngineLover/linux-wallpaperengine-kde/releases/tag/v0.9.4
-- Asset: `linux-wallpaperengine-kde-portable-x86_64.tar.gz`
-- Archive SHA-256: `f6328cc6b106aa6ee66eb3f044eb09af47a9b154fe7c78c44209a4295afe07a3`
+- Wallweave release asset: `wallweave-renderer-v0.9.4-pause1-linux-x86_64.tar.gz`
+- Its SHA-256 is pinned in `scripts/install-renderer.py` and published in the release's `SHA256SUMS`.
 - Engine license: GPL-3.0; third-party components keep their upstream terms.
 - Upstream basis: https://github.com/Almamu/linux-wallpaperengine
 
-The installer records provenance in `runtime/v0.9.4/wallweave-install.json`. Do not upload `runtime/` as part of this app's source. The project's `.gitignore` excludes runtime and build artifacts.
+The installer records provenance in `v0.9.4-wallweave-pause1/wallweave-install.json` under the selected renderer directory. Do not upload `runtime/` as part of this app's source. The project's `.gitignore` excludes runtime and build artifacts.
 
 The optional cooperative-pause build applies `patches/renderer-cooperative-pause.patch` to upstream commit `a239861367cb8d338ef8ba346f937067c3a266d8`. This renderer modification retains GPL-3.0; Wallweave's MIT license does not relicense the engine. `scripts/build-pause-renderer.py` records the patch digest and includes the modified engine/submodule sources, patch and engine license with the local runtime. CEF and optional copied Node/V8 runtime libraries retain their original component terms. The source archive for Wallweave includes the patch and build script, not these renderer binaries.
+
+The v0.2.5 release distributes a separate portable renderer built on Debian 12 with the upstream packaging tools' glibc 2.35 compatibility floor. Its `licenses/` directory includes the engine license, CEF license/credits and copyright notices for bundled Debian libraries; `PROVENANCE.json` records the exact source revision, patch digest and Debian source-package versions. The companion `wallweave-renderer-v0.9.4-pause1-sources.tar.gz` supplies the patched engine, all submodules, build recipes and matching Debian dependency source archives. Neither renderer archive contains Wallpaper Engine assets or Workshop files.
 
 Other architectural references, not incorporated as code:
 

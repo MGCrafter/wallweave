@@ -61,6 +61,12 @@ The supervisor tests use executable fixtures, not a real wallpaper engine. They 
 
 The updated portable archive and AppImage built locally and passed checksum, launch, diagnostics, isolated user install/uninstall, desktop-entry and AppImage supervisor-lifetime smoke tests. They contain the cooperative renderer build script/patch and the font license notices. These local packages use the host's library baseline and were not substituted for the existing public v0.2.4 release downloads.
 
+## Release 0.2.5 preparation (2026-10-27)
+
+- The versioned app passed all 73 Rust tests, formatting, Clippy and the CLI-only build. Four additional installer regressions cover repeatable upgrades, preserving the old runtime, checksum mismatch, unsupported pause capability and escaping archive links.
+- The new portable app was installed over the actual published v0.2.4 archive in an isolated home. Configuration, wallpaper assignments/properties, the auto-pause preference and saved state remained byte-for-byte intact after upgrade and after removal. AppImage startup, cache reuse and background supervisor lifetime also passed.
+- The cooperative renderer was built in Debian 12 from the pinned upstream revision plus the pause patch. Its standalone C++ pause-control test passed. Upstream portable packaging collected 183 libraries and verified its glibc requirement is no newer than 2.35. The release includes the separate renderer runtime and matching engine/dependency sources.
+
 ## Not yet verified
 
 - Full visual equivalence to the original Windows engine and every interactive feature. Short loading/rendering checks cover 44 supported projects; known renderer limitations are listed below.

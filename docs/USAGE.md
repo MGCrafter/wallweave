@@ -128,7 +128,16 @@ Saving restarts only desktop wallpapers whose rule changed, preserving their pro
 
 The preference is saved separately in `auto-pause.json` in Wallweave's state directory, preserving compatibility with existing `config.toml` files. When updating an already-running older supervisor, run `./run.sh shutdown` once and reopen Wallweave to restore the saved wallpapers with the new rules.
 
-Manual and Hyprland pause now require a cooperative renderer build:
+Manual and Hyprland pause require the cooperative renderer supplied with v0.2.5. Download `install-renderer.py` from the release, close Wallweave and run:
+
+```sh
+wallweave shutdown
+python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer" --configure wallweave
+```
+
+For AppImage, use its executable path instead of `wallweave`, including after `--configure`. Reopen the app to restore saved assignments. Existing pause preferences are preserved; enable the desired rule under **Einstellungen → Wiedergabe**. The installer verifies the pinned checksum and cooperative-pause capability before selecting the new runtime, and keeps older runtime directories.
+
+For developers who prefer to build the same adapter from source:
 
 ```sh
 python3 scripts/build-pause-renderer.py --install

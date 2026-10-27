@@ -36,10 +36,10 @@ def main():
             env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), PIPEWIRE_RUNTIME_DIR=str(runtime),
                        XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"),
                        XDG_DATA_HOME=str(root / "data"), PULSE_SERVER=f"unix:{runtime}/pulse/native",
-                       PULSE_RUNTIME_PATH=str(runtime / "pulse"), PIPEWIRE_REMOTE="pipewire-0",
+                       PIPEWIRE_REMOTE="pipewire-0",
                        XDG_SESSION_TYPE="x11", XDG_CURRENT_DESKTOP="", WAYLAND_DISPLAY="",
                        LIBGL_ALWAYS_SOFTWARE="1", SDL_AUDIODRIVER="pulseaudio")
-            for key in ("HYPRLAND_INSTANCE_SIGNATURE", "DBUS_SESSION_BUS_ADDRESS", "PIPEWIRE_CONFIG_DIR", "WIREPLUMBER_CONFIG_DIR", "DISPLAY"):
+            for key in ("HYPRLAND_INSTANCE_SIGNATURE", "DBUS_SESSION_BUS_ADDRESS", "PIPEWIRE_CONFIG_DIR", "WIREPLUMBER_CONFIG_DIR", "PULSE_RUNTIME_PATH", "DISPLAY"):
                 env.pop(key, None)
             # No desktop service activation: in particular no document-portal
             # FUSE mount should outlive this disposable bus.
@@ -102,7 +102,8 @@ def main():
         spawn("wireplumber", "wireplumber")
         wait_for(lambda: "Server Name" in command("pactl", "info"), "Isolated audio server unavailable")
         command("pactl", "load-module", "module-null-sink", "sink_name=wallweave_test", "rate=48000", "channels=2")
-        command("pactl", "set-default-sink", "wallweave_test")
+        wait_for(lambda: "wallweave_test" in command("pactl", "list", "short", "sinks"), "Isolated test sink unavailable")
+        wait_for(lambda: command("pactl", "set-default-sink", "wallweave_test") == "", "Isolated default sink unavailable")
         folder = root / "video"
         folder.mkdir(exist_ok=True)
         (folder / "project.json").write_text(json.dumps({"title": "Pause fixture", "type": "video", "file": "test.mp4"}))

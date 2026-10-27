@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Smoke-test release files with an isolated home and a fake wallpaper renderer."""
+import argparse
 import hashlib
 import json
 import os
@@ -18,6 +19,9 @@ def run(command: list[str], env: dict[str, str]) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--previous-archive", type=Path, help="Also test updating this published portable release")
+    args = parser.parse_args()
     version = re.search(r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.M)[1]
     output = ROOT / "dist"
     for line in (output / "SHA256SUMS").read_text().splitlines():
@@ -36,18 +40,43 @@ def main() -> None:
         with tarfile.open(output / f"wallweave-{version}-linux-x86_64.tar.gz") as tar:
             tar.extractall(root, filter="data")
         portable = root / f"wallweave-{version}-linux-x86_64"
+        if args.previous_archive:
+            previous = root / "previous"
+            previous.mkdir()
+            with tarfile.open(args.previous_archive) as tar:
+                tar.extractall(previous, filter="data")
+            old_installer, = previous.glob("*/install.py")
+            run(["python3", str(old_installer)], env)
+            # Real saved configuration and opaque UI/download state must survive
+            # replacement of the installed app directory byte for byte.
+            (state / "config.toml").write_text(
+                'discover_steam = false\nfps = 45\nvolume = 19\n'
+                '[assignments.DP-1]\nwallpaper = "/offline/kept-wallpaper"\n'
+                '[assignments.DP-1.properties]\nspeed = "0.75"\n'
+            )
+            (state / "state").mkdir(exist_ok=True)
+            for name, value in (("auto-pause.json", '"focused"'),
+                                ("favorites.json", '["/offline/kept-wallpaper"]'),
+                                ("download-queue.json", '{"pending":[12345]}')):
+                (state / "state" / name).write_text(value)
+        saved = {p.relative_to(state): p.read_bytes() for p in state.rglob("*") if p.is_file()}
         launcher = portable / "run.sh"
         assert run([str(launcher), "--version"], env).strip() == f"wallweave {version}"
         json.loads(run([str(launcher), "doctor", "--json"], env))
         assert "Wallweave" in run([str(launcher), "inspect", str(portable / "examples/web-pulse")], env)
         run(["python3", str(portable / "install.py")], env)
+        assert all((state / p).read_bytes() == data for p, data in saved.items()), "Update changed user state"
         installed = home / ".local/bin/wallweave"
         assert run([str(installed), "--version"], env).strip() == f"wallweave {version}"
+        installed_root = home / ".local/share/wallweave/app"
+        assert (installed_root / "patches/renderer-cooperative-pause.patch").is_file()
+        assert (installed_root / "tests/native_pause_control.cpp").is_file()
         desktop = home / ".local/share/applications/io.wallweave.Wallweave.desktop"
         run(["desktop-file-validate", str(desktop)], env)
         run(["python3", str(portable / "install.py"), "--uninstall"], env)
         assert not installed.exists() and not desktop.exists()
         assert (state / "config.toml").is_file()
+        assert all((state / p).read_bytes() == data for p, data in saved.items()), "Removal changed user state"
 
         image = output / f"Wallweave-{version}-x86_64.AppImage"
         if image.exists():
@@ -78,6 +107,8 @@ def main() -> None:
         print("Linux package smoke tests passed: checksums, launch, diagnostics, isolated user install/uninstall and desktop entry.")
         if image.exists():
             print("AppImage launch, cache reuse and supervisor lifetime checks passed.")
+        if args.previous_archive:
+            print("Published-release upgrade passed; settings, assignments, pause preference and saved state retained.")
 
 
 if __name__ == "__main__":
