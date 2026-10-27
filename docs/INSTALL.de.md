@@ -15,10 +15,10 @@ Die Wiedergabe wurde unter Hyprland geprüft. Andere Desktop-Umgebungen sind noc
 
 ## Arch Linux, EndeavourOS und CachyOS
 
-Die Datei `wallweave-0.2.5-1-x86_64.pkg.tar.zst` aus [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen:
+Die Datei `wallweave-0.2.6-1-x86_64.pkg.tar.zst` aus [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen:
 
 ```sh
-sudo pacman -U ./wallweave-0.2.5-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wallweave-0.2.6-1-x86_64.pkg.tar.zst
 wallweave
 ```
 
@@ -53,34 +53,34 @@ Persönliche Einstellungen, Logs, Steam-Dateien und separat installierte Rendere
 
 ## AppImage: herunterladen und starten
 
-Die Datei `Wallweave-0.2.5-x86_64.AppImage` unter [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen, beispielsweise in `~/Applications` ablegen und starten:
+Die Datei `Wallweave-0.2.6-x86_64.AppImage` unter [Releases](https://github.com/MGCrafter/wallweave/releases/latest) herunterladen, beispielsweise in `~/Applications` ablegen und starten:
 
 ```sh
-chmod +x Wallweave-0.2.5-x86_64.AppImage
-./Wallweave-0.2.5-x86_64.AppImage
+chmod +x Wallweave-0.2.6-x86_64.AppImage
+./Wallweave-0.2.6-x86_64.AppImage
 ```
 
 Falls eine FUSE-Fehlermeldung erscheint:
 
 ```sh
-./Wallweave-0.2.5-x86_64.AppImage --appimage-extract-and-run
+./Wallweave-0.2.6-x86_64.AppImage --appimage-extract-and-run
 ```
 
 Auch CLI-Befehle funktionieren direkt über die Datei:
 
 ```sh
-./Wallweave-0.2.5-x86_64.AppImage doctor
+./Wallweave-0.2.6-x86_64.AppImage doctor
 ```
 
 Die App legt beim ersten Start eine versionsbezogene Kopie unter `~/.cache/wallweave/appimage/` an. Dadurch können Wallpaper weiterlaufen, wenn das AppImage und die Oberfläche geschlossen werden. Bei gesetztem `XDG_CACHE_HOME` liegt der Cache dort. Für einen automatisch installierten Menüeintrag die Archiv-Variante verwenden.
 
 ## Archiv: optional mit Eintrag im Anwendungsmenü
 
-Die Datei `wallweave-0.2.5-linux-x86_64.tar.gz` aus demselben Release herunterladen:
+Die Datei `wallweave-0.2.6-linux-x86_64.tar.gz` aus demselben Release herunterladen:
 
 ```sh
-tar -xzf wallweave-0.2.5-linux-x86_64.tar.gz
-cd wallweave-0.2.5-linux-x86_64
+tar -xzf wallweave-0.2.6-linux-x86_64.tar.gz
+cd wallweave-0.2.6-linux-x86_64
 python3 install.py
 ```
 
@@ -140,17 +140,19 @@ Vor einem Update oder dem Entfernen die Oberfläche schließen und den bisherige
 ~/.local/bin/wallweave shutdown
 ```
 
-Beim AppImage entsprechend `./Wallweave-0.2.5-x86_64.AppImage shutdown` verwenden.
+Beim AppImage entsprechend `./Wallweave-0.2.6-x86_64.AppImage shutdown` verwenden.
 
-**App aktualisieren:** Neues AppImage herunterladen und ausführbar machen oder das neue Archiv entpacken und erneut `python3 install.py` ausführen. Beim Arch-Paket `sudo pacman -U ./wallweave-0.2.5-1-x86_64.pkg.tar.zst` verwenden. Einstellungen, Favoriten und gespeicherte Wallpaper bleiben erhalten.
+**App aktualisieren:** Neues AppImage herunterladen und ausführbar machen oder das neue Archiv entpacken und erneut `python3 install.py` ausführen. Beim Arch-Paket `sudo pacman -U ./wallweave-0.2.6-1-x86_64.pkg.tar.zst` verwenden. Einstellungen, Favoriten und gespeicherte Wallpaper bleiben erhalten.
 
-**Zusätzlich beim Update von v0.2.4 auf v0.2.5:** Den neuen Renderer installieren, damit der Auto-Pause-Fix verfügbar ist. `install-renderer.py` aus dem neuen Release herunterladen:
+**Neu in v0.2.6:** Unter **Einstellungen → Wiedergabe → Beim Spielen** die Option **Grafikspeicher beim Spielen freigeben** einschalten und speichern. Sie ist standardmäßig ausgeschaltet. Bei erkannten Spielen werden die Wallpaper auf allen Bildschirmen entladen und danach automatisch wiederhergestellt. Der Renderer aus v0.2.5 bleibt kompatibel und muss nicht erneut installiert werden. Den bisherigen Supervisor vor dem App-Update einmal mit `wallweave shutdown` beenden.
+
+**Zusätzlich beim Update von v0.2.4 oder älter:** Den neuen Renderer installieren, damit der Auto-Pause-Fix verfügbar ist. `install-renderer.py` aus dem neuen Release herunterladen:
 
 ```sh
 python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer" --configure wallweave
 ```
 
-Bei einer Benutzerinstallation ohne passenden `PATH` hinter `--configure` den Pfad `"$HOME/.local/bin/wallweave"` angeben. Beim AppImage stattdessen `--configure ./Wallweave-0.2.5-x86_64.AppImage` verwenden. Du musst nichts selbst kompilieren. Der Installer prüft die SHA-256-Prüfsumme und die Pause-Unterstützung, erhält den bisherigen Renderer und setzt den neuen Programmpfad in Wallweave.
+Bei einer Benutzerinstallation ohne passenden `PATH` hinter `--configure` den Pfad `"$HOME/.local/bin/wallweave"` angeben. Beim AppImage stattdessen `--configure ./Wallweave-0.2.6-x86_64.AppImage` verwenden. Du musst nichts selbst kompilieren. Der Installer prüft die SHA-256-Prüfsumme und die Pause-Unterstützung, erhält den bisherigen Renderer und setzt den neuen Programmpfad in Wallweave.
 
 Danach Wallweave öffnen. Die Wallpaper-Zuweisungen werden wiederhergestellt. Die bisherige Auto-Pause-Einstellung bleibt erhalten; zum Einschalten **Einstellungen → Wiedergabe → Automatisch pausieren** öffnen. Ein automatischer App-Updater ist noch nicht enthalten.
 

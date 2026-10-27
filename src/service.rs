@@ -1,7 +1,7 @@
 //! Session-local supervisor. Only child process groups started here are signalled.
 use crate::{
-    config::{Assignment, AutoPause, Paths},
-    library, renderer, visibility,
+    config::{Assignment, AutoPause, GamingMode, Paths},
+    gaming, library, renderer, visibility,
 };
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
@@ -40,7 +40,7 @@ pub enum Request {
         properties: BTreeMap<String, String>,
     },
     Status,
-    /// Apply saved auto-pause rules to running desktop wallpapers.
+    /// Apply saved game-unload and auto-pause rules to desktop wallpapers.
     ReloadPlayback,
     /// Start saved wallpapers only on connected outputs without a live renderer.
     Restore {
@@ -75,11 +75,18 @@ pub struct RunState {
     #[serde(default)]
     pub pause_supported: bool,
     pub log: PathBuf,
+    /// No renderer process exists; pid is zero until restoration succeeds.
+    #[serde(default)]
+    pub unloaded: bool,
 }
 
 impl RunState {
     pub fn playback_label(&self) -> &'static str {
-        if self.paused {
+        if self.unloaded && self.paused {
+            "Unloaded · manually paused"
+        } else if self.unloaded {
+            "Unloaded · waiting to restore"
+        } else if self.paused {
             "Paused"
         } else if self.auto_paused == Some(true) {
             "Paused automatically"
@@ -103,6 +110,10 @@ pub struct Response {
     pub states: Vec<RunState>,
     #[serde(default)]
     pub failures: Vec<String>,
+    #[serde(default)]
+    pub gaming_supported: bool,
+    #[serde(default)]
+    pub game_active: bool,
 }
 
 fn read_message<T: for<'de> Deserialize<'de>>(stream: &UnixStream) -> Result<T> {
@@ -131,6 +142,13 @@ pub fn client(paths: &Paths, request: &Request) -> Result<Response> {
             .contains("unknown variant `reload_playback`")
     {
         response.message = "Auto-pause preference saved. The running supervisor is from an older version: run wallweave shutdown, then reopen Wallweave to restore your wallpapers with the new rules.".into();
+    }
+    if matches!(request, Request::ReloadPlayback)
+        && !response.gaming_supported
+        && GamingMode::load(paths).unwrap_or_default() == GamingMode::Unload
+    {
+        response.ok = false;
+        response.message = "Spielmodus gespeichert. Bitte zuerst „wallweave shutdown“ ausführen und dann die aktualisierte App öffnen, damit die Hintergrundsteuerung ihn übernimmt.".into();
     }
     Ok(response)
 }
@@ -335,6 +353,12 @@ impl Drop for Running {
     }
 }
 
+#[derive(Clone)]
+struct Unloaded {
+    state: RunState,
+    properties: BTreeMap<String, String>,
+}
+
 struct Supervisor {
     paths: Paths,
     active: BTreeMap<String, Running>,
@@ -342,10 +366,18 @@ struct Supervisor {
     relocation_at: Instant,
     visibility: Option<visibility::Watcher>,
     visibility_error: Option<String>,
+    gaming: Option<gaming::Watcher>,
+    gaming_mode: GamingMode,
+    game_active: bool,
+    game_quiet_since: Option<Instant>,
+    gaming_error: Option<String>,
+    unloaded: BTreeMap<String, Unloaded>,
+    restore_at: Option<Instant>,
 }
 
 impl Supervisor {
     fn poll(&mut self) {
+        self.poll_gaming();
         // The renderer expires a pause after three seconds without renewal.
         // A crashed supervisor therefore cannot strand playback in pause.
         for run in self.active.values_mut() {
@@ -431,7 +463,9 @@ impl Supervisor {
             let enabled = self.active.values().any(|run| {
                 run.state.auto_paused.is_some() && run.state.auto_pause != Some(AutoPause::Off)
             });
-            watcher.enabled(enabled);
+            watcher.enabled(
+                enabled || self.gaming_mode == GamingMode::Unload || !self.unloaded.is_empty(),
+            );
             let observation = if enabled {
                 watcher.snapshot()
             } else {
@@ -470,8 +504,119 @@ impl Supervisor {
             self.failures.drain(..self.failures.len() - 20);
         }
     }
+    fn poll_gaming(&mut self) {
+        let enabled = self.gaming_mode == GamingMode::Unload;
+        if let Some(watcher) = &self.gaming {
+            watcher.enabled(enabled);
+        }
+        if let Some(watcher) = &self.visibility
+            && (enabled || !self.unloaded.is_empty())
+        {
+            watcher.enabled(true);
+        }
+        let detected = if !enabled {
+            Ok(Some(false))
+        } else {
+            let steam = self
+                .gaming
+                .as_ref()
+                .map(|w| w.snapshot())
+                .unwrap_or(Ok(None));
+            let window = self
+                .visibility
+                .as_ref()
+                .and_then(|w| w.snapshot().ok())
+                .is_some_and(|s| s.game_running());
+            if window { Ok(Some(true)) } else { steam }
+        };
+        let error = detected.as_ref().err().cloned();
+        if error != self.gaming_error {
+            if let Some(error) = &error {
+                self.failures.push(format!("Game detection: {error}"));
+            }
+            self.gaming_error = error;
+        }
+        self.update_gaming(detected.ok().flatten());
+    }
+
+    fn update_gaming(&mut self, detected: Option<bool>) {
+        if self.gaming_mode == GamingMode::Off {
+            self.game_active = false;
+            self.game_quiet_since = None;
+        } else if detected == Some(true) {
+            self.game_active = true;
+            self.game_quiet_since = None;
+        } else if detected == Some(false) {
+            let quiet = self.game_quiet_since.get_or_insert_with(Instant::now);
+            if quiet.elapsed() >= Duration::from_secs(3) {
+                self.game_active = false;
+            }
+        } else {
+            // Unknown/stale detection must not restart renderers during a game.
+            self.game_active = true;
+            self.game_quiet_since = None;
+        }
+        if self.game_active {
+            self.restore_at = None;
+            let outputs: Vec<_> = self
+                .active
+                .keys()
+                .filter(|key| key.as_str() != "preview")
+                .cloned()
+                .collect();
+            for output in outputs {
+                if let Some(run) = self.active.remove(&output) {
+                    let mut state = run.state.clone();
+                    state.pid = 0;
+                    state.unloaded = true;
+                    self.unloaded.insert(
+                        output,
+                        Unloaded {
+                            state,
+                            properties: run.properties.clone(),
+                        },
+                    );
+                    drop(run); // Terminate and reap our own renderer group, releasing GPU allocations.
+                }
+            }
+        } else if !self.unloaded.is_empty()
+            && self
+                .restore_at
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
+        {
+            self.restore_at = Some(Instant::now());
+            let pending = self.unloaded.clone();
+            for (output, saved) in pending {
+                if let Some(watcher) = &self.visibility {
+                    // A disconnected output stays queued for reconnect, without a restart loop.
+                    if !watcher.snapshot().is_ok_and(|s| s.connected(&output)) {
+                        continue;
+                    }
+                }
+                match self.apply(
+                    &saved.state.wallpaper.to_string_lossy(),
+                    &output,
+                    false,
+                    &saved.properties,
+                ) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        let message = format!("Restore {output} after game: {e:#}");
+                        if !self.failures.contains(&message) {
+                            self.failures.push(message);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn states(&self) -> Vec<RunState> {
-        self.active.values().map(|v| v.state.clone()).collect()
+        self.active
+            .values()
+            .map(|v| v.state.clone())
+            .chain(self.unloaded.values().map(|v| v.state.clone()))
+            .collect()
     }
     fn apply(
         &mut self,
@@ -485,11 +630,54 @@ impl Supervisor {
         let engine = renderer::Renderer::detect(&config)?;
         let mut plan = renderer::plan(&engine, &config, wallpaper, output, preview, properties)?;
         let requested_auto_pause = AutoPause::load(&self.paths)?;
+        if !preview && self.game_active {
+            let state = RunState {
+                output: output.into(),
+                title: plan.wallpaper.title.clone(),
+                wallpaper: plan.wallpaper.folder.clone(),
+                pid: 0,
+                paused: false,
+                auto_pause: Some(requested_auto_pause),
+                auto_paused: None,
+                pause_supported: engine.supports_pause_control(),
+                log: self.paths.state.join("logs").join(format!("{output}.log")),
+                unloaded: true,
+            };
+            config.assignments.insert(
+                output.into(),
+                Assignment {
+                    wallpaper: state.wallpaper.clone(),
+                    properties: properties.clone(),
+                },
+            );
+            self.paths.save(&config)?;
+            self.active.remove(output);
+            self.unloaded.insert(
+                output.into(),
+                Unloaded {
+                    state,
+                    properties: properties.clone(),
+                },
+            );
+            return Ok("Wallpaper saved; unloaded while a game is running. It will return after the game exits.".into());
+        }
         let workspace_aware =
             self.visibility.is_some() && !preview && engine.supports("--no-fullscreen-pause");
         let auto_pause = plan.auto_pause(&engine, requested_auto_pause, workspace_aware);
+        // Set the initial control before spawning: restoring a manually paused
+        // wallpaper must not briefly play its audio or animation.
+        let manually_paused = !preview
+            && self
+                .unloaded
+                .get(output)
+                .is_some_and(|saved| saved.state.paused);
+        ensure!(
+            !manually_paused || engine.supports_pause_control(),
+            "Cannot restore manual pause: renderer lacks safe pause control"
+        );
         let pause_control = if engine.supports_pause_control() {
             let control = PauseControl::new(&self.paths)?;
+            control.set(manually_paused)?;
             plan.arguments.extend([
                 "--pause-control-file".into(),
                 control.path().into_os_string(),
@@ -529,11 +717,12 @@ impl Supervisor {
             title: plan.wallpaper.title.clone(),
             wallpaper: plan.wallpaper.folder.clone(),
             pid: child.id(),
-            paused: false,
+            paused: manually_paused,
             auto_pause,
             auto_paused: workspace_aware.then_some(false),
             pause_supported: pause_control.is_some(),
             log: log_path.clone(),
+            unloaded: false,
         };
         let mut run = Running {
             child,
@@ -560,6 +749,7 @@ impl Supervisor {
                 .pauses(&key, auto_pause.unwrap_or(AutoPause::Off));
             run.automatic_pause(paused)?;
         }
+        self.unloaded.remove(&key);
         self.active.insert(key, run);
         if !preview {
             config.assignments.insert(
@@ -593,6 +783,8 @@ impl Supervisor {
     fn dispatch(&mut self, request: Request) -> Result<String> {
         match request {
             Request::ReloadPlayback => {
+                self.gaming_mode = GamingMode::load(&self.paths)?;
+                self.poll_gaming();
                 let mode = AutoPause::load(&self.paths)?;
                 let targets: Vec<_> = self
                     .active
@@ -627,7 +819,7 @@ impl Supervisor {
                         Err(error) => errors.push(format!("{}: {error:#}", state.output)),
                     }
                 }
-                let message = format!("Auto-pause rules updated for {updated} wallpaper(s).");
+                let message = format!("Playback rules updated for {updated} wallpaper(s).");
                 ensure!(errors.is_empty(), "{message}\n{}", errors.join("\n"));
                 Ok(message)
             }
@@ -637,7 +829,9 @@ impl Supervisor {
                 preview,
                 properties,
             } => self.apply(&target, &output, preview, &properties),
-            Request::Status => Ok(if self.active.is_empty() {
+            Request::Status => Ok(if self.game_active && !self.unloaded.is_empty() {
+                "Game running; wallpapers unloaded"
+            } else if self.active.is_empty() {
                 "No wallpapers running"
             } else {
                 "Running"
@@ -653,7 +847,7 @@ impl Supervisor {
                         continue;
                     }
                     self.poll();
-                    if self.active.contains_key(&output) {
+                    if self.active.contains_key(&output) || self.unloaded.contains_key(&output) {
                         running += 1;
                         continue;
                     }
@@ -680,13 +874,16 @@ impl Supervisor {
             Request::Stop { output } => {
                 if let Some(output) = output {
                     self.active.remove(&output);
+                    self.unloaded.remove(&output);
                 } else {
                     self.active.clear();
+                    self.unloaded.clear();
                 }
                 Ok("Stopped Wallweave's wallpaper processes".into())
             }
             Request::Shutdown => {
                 self.active.clear();
+                self.unloaded.clear();
                 Ok("Wallweave supervisor stopped".into())
             }
         }
@@ -699,6 +896,7 @@ impl Supervisor {
                 let selected: Vec<_> = self
                     .active
                     .keys()
+                    .chain(self.unloaded.keys())
                     .filter(|key| output.as_ref().is_none_or(|o| o == *key))
                     .cloned()
                     .collect();
@@ -706,10 +904,19 @@ impl Supervisor {
                     Err(anyhow::anyhow!("No matching wallpaper is running"))
                 } else {
                     let result: Result<()> = selected.into_iter().try_for_each(|key| {
-                        self.active
-                            .get_mut(&key)
-                            .context("Wallpaper disappeared")?
-                            .pause(paused)
+                        if let Some(run) = self.unloaded.get_mut(&key) {
+                            ensure!(
+                                !paused || run.state.pause_supported,
+                                "This renderer cannot pause safely"
+                            );
+                            run.state.paused = paused;
+                            Ok(())
+                        } else {
+                            self.active
+                                .get_mut(&key)
+                                .context("Wallpaper disappeared")?
+                                .pause(paused)
+                        }
                     });
                     result.map(|_| {
                         if paused {
@@ -730,6 +937,8 @@ impl Supervisor {
             },
             states: self.states(),
             failures: self.failures.clone(),
+            gaming_supported: true,
+            game_active: self.game_active,
         }
     }
 }
@@ -772,6 +981,7 @@ pub fn run(paths: Paths) -> Result<()> {
     ctrlc::set_handler(move || {
         flag.store(false, Ordering::Relaxed);
     })?;
+    let gaming_mode = GamingMode::load(&paths)?;
     let mut supervisor = Supervisor {
         paths: paths.clone(),
         active: BTreeMap::new(),
@@ -779,6 +989,13 @@ pub fn run(paths: Paths) -> Result<()> {
         relocation_at: Instant::now(),
         visibility: visibility::Watcher::start(),
         visibility_error: None,
+        gaming: Some(gaming::Watcher::start()?),
+        gaming_mode,
+        game_active: gaming_mode == GamingMode::Unload,
+        game_quiet_since: None,
+        gaming_error: None,
+        unloaded: BTreeMap::new(),
+        restore_at: None,
     };
     while alive.load(Ordering::Relaxed) {
         supervisor.poll();
@@ -811,3 +1028,7 @@ pub fn run(paths: Paths) -> Result<()> {
     let _ = fs::remove_file(paths.socket());
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "service_tests.rs"]
+mod tests;

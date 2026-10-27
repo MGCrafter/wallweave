@@ -189,6 +189,34 @@ impl AutoPause {
     }
 }
 
+/// Stored separately so an already-running older supervisor can still read config.toml.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum GamingMode {
+    #[default]
+    Off,
+    Unload,
+}
+
+impl GamingMode {
+    pub fn load(paths: &Paths) -> Result<Self> {
+        match fs::read(paths.state.join("gaming-mode.json")) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("Invalid gaming preference"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e).context("Read gaming preference"),
+        }
+    }
+    pub fn save(self, paths: &Paths) -> Result<()> {
+        fs::create_dir_all(&paths.state)?;
+        let mut file = tempfile::NamedTempFile::new_in(&paths.state)?;
+        serde_json::to_writer(&mut file, &self)?;
+        file.as_file().sync_all()?;
+        file.persist(paths.state.join("gaming-mode.json"))
+            .map_err(|e| e.error)?;
+        Ok(())
+    }
+}
+
 pub fn absolute(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         Ok(path.to_path_buf())

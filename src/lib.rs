@@ -1,5 +1,6 @@
 pub mod config;
 pub mod desktop;
+pub mod gaming;
 pub mod library;
 pub mod renderer;
 pub mod service;

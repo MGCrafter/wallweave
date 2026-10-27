@@ -5,12 +5,13 @@ The release pipeline builds on Ubuntu 22.04 (glibc 2.35) and packages a native A
 ## Automated release
 
 1. Build/test the portable cooperative renderer as below. Pin its SHA-256 and target release URL in `scripts/install-renderer.py`.
+   An unchanged runtime may be reused with its matching source archive after checking both against the previously published `SHA256SUMS`; do not rebuild or relabel its bytes.
 2. Update `Cargo.toml`, `Cargo.lock`, versioned download examples and `docs/RELEASE.md`.
 3. Run the normal Rust and installer checks, review and commit the changes.
 4. Create a **draft** `v<package-version>` release with the renderer binary and matching source archives attached. Keep it unpublished until the app/package checks finish.
-5. Push an annotated `v<package-version>` tag at the reviewed commit, for example `v0.2.5`.
+5. Push an annotated `v<package-version>` tag at the reviewed commit, for example `v0.2.6`.
 
-`.github/workflows/release.yml` verifies the tag, runs the tests and builds the app with its Steamworks runtime. It downloads a pinned, hash-verified linuxdeploy, generates the AppImage, archive, renderer installer, `PKGBUILD` and checksums, and runs package smoke tests including an upgrade from the published v0.2.4 archive. A second job uses the official Arch Linux base-devel container to build a `.pkg.tar.zst`, install it with pacman, check the installed CLI and remove it again. The publishing job requires an existing draft, verifies the attached renderer against the installer's pinned digest and requires its matching source archive. Only after both jobs pass does it upload the app files, calculate combined checksums and publish the draft. An already published release is never overwritten by the workflow.
+`.github/workflows/release.yml` verifies the tag, runs the tests and builds the app with its Steamworks runtime. It downloads a pinned, hash-verified linuxdeploy, generates the AppImage, archive, renderer installer, `PKGBUILD` and checksums, and runs package smoke tests including an upgrade from the published v0.2.5 archive. A second job uses the official Arch Linux base-devel container to build a `.pkg.tar.zst`, install it with pacman, check the installed CLI and remove it again. The publishing job requires an existing draft, verifies the attached renderer against the installer's pinned digest and requires its matching source archive. Only after both jobs pass does it upload the app files, calculate combined checksums and publish the draft. An already published release is never overwritten by the workflow.
 
 `workflow_dispatch` builds and tests artifacts without publishing a release. Rust CI runs for pushes and pull requests as well.
 

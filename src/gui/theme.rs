@@ -188,6 +188,8 @@ pub(super) fn playback(state: &str) -> &str {
     match state {
         "Playing" => "Wird wiedergegeben",
         "Paused" => "Pausiert",
+        "Unloaded · waiting to restore" => "Entladen · startet automatisch",
+        "Unloaded · manually paused" => "Entladen · manuell pausiert",
         "Paused automatically" => "Automatisch pausiert",
         "Saved · not running" => "Gespeichert · nicht aktiv",
         _ => state,

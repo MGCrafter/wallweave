@@ -108,6 +108,25 @@ Installed copies take precedence over staged copies. Saved staging paths still r
 
 Preset projects referencing a separate base wallpaper are not supported yet and are reported with their dependency ID.
 
+## Release graphics memory while gaming
+
+Since 0.2.6, **Einstellungen → Wiedergabe → Beim Spielen → Grafikspeicher beim Spielen freigeben** is an optional setting (off by default). Save it to apply the rule immediately. The supervisor keeps detecting games after the Wallweave window closes.
+
+The setting ends Wallweave's desktop renderer processes on all outputs, releasing their memory allocations. Ordinary pause only stops animation and retains those allocations. Window previews stay open. Wallweave does not signal game processes or other wallpaper applications.
+
+Steam game processes are checked every 750 ms, including native games, Proton and Steam shortcuts; Wallpaper Engine itself and Steam redistributables are excluded. On Hyprland, mapped `steam_app_<id>` and `gamescope` windows, or windows with a `game` tag, are also detected. Hidden/minimized windows and other workspaces still count, so Alt-Tab does not restart wallpapers. A non-Steam game outside these categories is not automatically detected. Steam-launched software using a game ID can also trigger the rule.
+
+After no game has been detected for three seconds, previously active wallpapers restart with their per-output assignments and properties. Manual pause is preserved from the first frame. Stopping a wallpaper while it is unloaded cancels its automatic return; choosing a new wallpaper queues it until the game exits. Failed restarts and disconnected Hyprland outputs retain their assignments and retry every five seconds. Missing or stale process detection keeps wallpapers unloaded until detection recovers or the setting is switched off. Turning the setting off restores queued wallpapers even if a game is still open.
+
+The activity view shows **Entladen · startet automatisch** while a renderer is absent. CLI JSON reports `unloaded: true` and `pid: 0` for these outputs. To change the setting from the terminal:
+
+```sh
+./run.sh config gaming-mode unload
+./run.sh config gaming-mode off
+```
+
+After upgrading an already-running older supervisor, restart Wallweave's supervisor once with `wallweave shutdown`, then reopen the updated app. The setting is stored separately in `gaming-mode.json` under Wallweave's state directory so older versions can still read the main configuration.
+
 ## Automatic performance pause
 
 In **Einstellungen → Wiedergabe → Automatisch pausieren**, choose:

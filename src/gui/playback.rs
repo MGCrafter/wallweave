@@ -85,6 +85,24 @@ impl App {
         })
     }
 
+    pub(super) fn playback_summary(&self) -> (String, Color32) {
+        let desktop: Vec<_> = self
+            .status
+            .states
+            .iter()
+            .filter(|s| s.output != "preview")
+            .collect();
+        let unloaded = desktop.iter().filter(|s| s.unloaded).count();
+        let active = desktop.len() - unloaded;
+        if unloaded == 0 {
+            (format!("{active} Bildschirme aktiv"), theme::SUCCESS)
+        } else if active == 0 {
+            (format!("{unloaded} Wallpaper entladen"), ACCENT)
+        } else {
+            (format!("{active} aktiv · {unloaded} entladen"), ACCENT)
+        }
+    }
+
     pub(super) fn display_wallpapers(&self) -> BTreeMap<String, DisplayWallpaper> {
         let outputs: BTreeSet<_> = self
             .config
@@ -451,6 +469,7 @@ mod tests {
             auto_pause: None,
             auto_paused: None,
             pause_supported: true,
+            unloaded: false,
             pid: 1,
             log: dir.path().join("log"),
         };

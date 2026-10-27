@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use wallweave::{
-    config::{AutoPause, Paths, absolute},
+    config::{AutoPause, GamingMode, Paths, absolute},
     desktop, library, renderer,
     service::{self, Request},
     workshop,
@@ -119,6 +119,11 @@ enum ConfigAction {
     },
     Renderer {
         path: PathBuf,
+    },
+    /// Unload desktop wallpapers while Steam games or Hyprland game windows are running.
+    GamingMode {
+        #[arg(value_enum)]
+        mode: GamingMode,
     },
     /// Automatically pause for apps/games: focused (default), fullscreen, or off.
     AutoPause {
@@ -479,6 +484,14 @@ fn main() -> Result<()> {
                 }
                 ConfigAction::Assets { path } => config.assets = Some(absolute(&path)?),
                 ConfigAction::Renderer { path } => config.renderer = Some(absolute(&path)?),
+                ConfigAction::GamingMode { mode } => {
+                    mode.save(&paths)?;
+                    println!("Gaming mode: {mode:?}");
+                    if service::client(&paths, &Request::Status).is_ok() {
+                        print_response(&paths, Request::ReloadPlayback, false)?;
+                    }
+                    return Ok(());
+                }
                 ConfigAction::AutoPause { mode } => {
                     mode.save(&paths)?;
                     println!("Automatic pause: {}", mode.label());

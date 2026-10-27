@@ -36,10 +36,10 @@ Wallweave manages your library, settings and wallpaper processes. A separate `li
 
 ### Arch Linux, EndeavourOS & CachyOS
 
-Download `wallweave-0.2.5-1-x86_64.pkg.tar.zst` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest) and install the native package:
+Download `wallweave-0.2.6-1-x86_64.pkg.tar.zst` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest) and install the native package:
 
 ```sh
-sudo pacman -U ./wallweave-0.2.5-1-x86_64.pkg.tar.zst
+sudo pacman -U ./wallweave-0.2.6-1-x86_64.pkg.tar.zst
 wallweave
 ```
 
@@ -49,22 +49,22 @@ Prebuilt downloads target **x86_64 Linux with glibc 2.35 or newer**, built on Ub
 
 ### AppImage
 
-Download `Wallweave-0.2.5-x86_64.AppImage` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest), then:
+Download `Wallweave-0.2.6-x86_64.AppImage` from [Releases](https://github.com/MGCrafter/wallweave/releases/latest), then:
 
 ```sh
-chmod +x Wallweave-0.2.5-x86_64.AppImage
-./Wallweave-0.2.5-x86_64.AppImage
+chmod +x Wallweave-0.2.6-x86_64.AppImage
+./Wallweave-0.2.6-x86_64.AppImage
 ```
 
-If FUSE is unavailable, run `./Wallweave-0.2.5-x86_64.AppImage --appimage-extract-and-run`.
+If FUSE is unavailable, run `./Wallweave-0.2.6-x86_64.AppImage --appimage-extract-and-run`.
 
 ### Portable archive and application-menu entry
 
-Download `wallweave-0.2.5-linux-x86_64.tar.gz` from the same release:
+Download `wallweave-0.2.6-linux-x86_64.tar.gz` from the same release:
 
 ```sh
-tar -xzf wallweave-0.2.5-linux-x86_64.tar.gz
-cd wallweave-0.2.5-linux-x86_64
+tar -xzf wallweave-0.2.6-linux-x86_64.tar.gz
+cd wallweave-0.2.6-linux-x86_64
 ./run.sh                         # Run directly, without installation.
 python3 install.py               # Optional: install for your user, no sudo.
 ```
@@ -75,13 +75,15 @@ The installer adds **Wallweave** to your application menu and creates `~/.local/
 
 Close the GUI and run `wallweave shutdown` (or the old AppImage with `shutdown`). Install the new Arch package, replace the AppImage, or extract the new portable archive and run `python3 install.py` again. Your settings and saved wallpapers are retained.
 
-For the v0.2.5 pause fix, also download the new `install-renderer.py` and run:
+The game memory-release setting is off by default. Enable **Einstellungen → Wiedergabe → Beim Spielen → Grafikspeicher beim Spielen freigeben** and save. Existing v0.2.5 renderer installations remain compatible; no renderer update is needed.
+
+If upgrading from v0.2.4 or older, install the cooperative renderer for the ordinary pause fix. Download `install-renderer.py` and run:
 
 ```sh
 python3 install-renderer.py --directory "$HOME/.local/share/wallweave/renderer" --configure wallweave
 ```
 
-For AppImage, pass `--configure ./Wallweave-0.2.5-x86_64.AppImage`. Reopen Wallweave and choose the desired auto-pause rule under **Einstellungen → Wiedergabe**. [Detailed update instructions →](docs/INSTALL.md#update)
+For AppImage, pass `--configure ./Wallweave-0.2.6-x86_64.AppImage`. Reopen Wallweave and choose the desired auto-pause rule under **Einstellungen → Wiedergabe**. [Detailed update instructions →](docs/INSTALL.md#update)
 
 ## First launch
 
@@ -129,6 +131,8 @@ wallweave shutdown                     # Stop Wallweave's wallpaper processes.
 [All commands, library behavior and troubleshooting →](docs/USAGE.md)
 
 App/game performance pause is available under **Einstellungen → Wiedergabe → Automatisch pausieren**: pause for a focused/fullscreen/maximized app, fullscreen/maximized only, or never (default). Hyprland checks visible workspaces per display and requires a renderer with cooperative pause control; unsupported renderers keep playing. Other desktops use the renderer integration. Playback resumes automatically. See [automatic pause](docs/USAGE.md#automatic-performance-pause) for behavior and update instructions.
+
+For games that need the wallpaper's GPU memory, enable **Einstellungen → Wiedergabe → Beim Spielen → Grafikspeicher beim Spielen freigeben**. Wallweave ends its desktop renderers for the duration of a detected game and restores them afterwards, including monitor assignments, properties and manual pauses. Alt-Tab keeps them unloaded. See [game memory release](docs/USAGE.md#release-graphics-memory-while-gaming) for detection coverage and behavior.
 
 ## Build from source
 

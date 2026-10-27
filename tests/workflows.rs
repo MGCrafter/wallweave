@@ -1017,6 +1017,7 @@ fn restore_works_with_an_older_supervisor_without_replacing_its_wallpaper() {
             auto_pause: None,
             auto_paused: None,
             pause_supported: true,
+            unloaded: false,
             log: "/fixture/log".into(),
         }];
         let deadline = Instant::now() + Duration::from_secs(4);

@@ -16,7 +16,7 @@ import urllib.request
 VERSION = "v0.9.4-wallweave-pause1"
 ASSET = "wallweave-renderer-v0.9.4-pause1-linux-x86_64.tar.gz"
 DIGEST = "ed19a3f83cdbca5a28de47783b358c25fc6d331930d89cd808a4662450cd8140"
-URL = f"https://github.com/MGCrafter/wallweave/releases/download/v0.2.5/{ASSET}"
+URL = f"https://github.com/MGCrafter/wallweave/releases/download/v0.2.6/{ASSET}"
 
 
 def check_renderer(launcher: Path):
@@ -113,7 +113,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=Path(__file__).resolve().parents[1] / "runtime")
     parser.add_argument("--archive", type=Path, help="Use an already downloaded archive (the pinned checksum is still required)")
-    parser.add_argument("--configure", help="Set the renderer in this Wallweave executable, e.g. wallweave or ./Wallweave-0.2.5-x86_64.AppImage")
+    parser.add_argument("--configure", help="Set the renderer in this Wallweave executable, e.g. wallweave or ./Wallweave-0.2.6-x86_64.AppImage")
     args = parser.parse_args()
     try:
         launcher = install(args.directory.resolve(), args.archive)

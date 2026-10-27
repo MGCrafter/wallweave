@@ -56,6 +56,7 @@ def main() -> None:
             )
             (state / "state").mkdir(exist_ok=True)
             for name, value in (("auto-pause.json", '"focused"'),
+                                ("gaming-mode.json", '"off"'),
                                 ("favorites.json", '["/offline/kept-wallpaper"]'),
                                 ("download-queue.json", '{"pending":[12345]}')):
                 (state / "state" / name).write_text(value)
@@ -68,6 +69,11 @@ def main() -> None:
         assert all((state / p).read_bytes() == data for p, data in saved.items()), "Update changed user state"
         installed = home / ".local/bin/wallweave"
         assert run([str(installed), "--version"], env).strip() == f"wallweave {version}"
+        # Check the new option on the actual packaged CLI without touching the
+        # real desktop or starting a supervisor.
+        for mode in ("unload", "off"):
+            run([str(installed), "config", "gaming-mode", mode], env)
+            assert json.loads((state / "state/gaming-mode.json").read_text()) == mode
         installed_root = home / ".local/share/wallweave/app"
         assert (installed_root / "patches/renderer-cooperative-pause.patch").is_file()
         assert (installed_root / "tests/native_pause_control.cpp").is_file()
@@ -108,7 +114,7 @@ def main() -> None:
         if image.exists():
             print("AppImage launch, cache reuse and supervisor lifetime checks passed.")
         if args.previous_archive:
-            print("Published-release upgrade passed; settings, assignments, pause preference and saved state retained.")
+            print("Published-release upgrade passed; settings, assignments, pause/game preferences and saved state retained.")
 
 
 if __name__ == "__main__":

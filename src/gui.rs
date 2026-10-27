@@ -1,5 +1,5 @@
 use crate::{
-    config::{AutoPause, Config, Paths},
+    config::{AutoPause, Config, GamingMode, Paths},
     desktop::{self, Desktop, Monitor},
     library::{self, Scan, Wallpaper},
     renderer::Renderer,
@@ -160,6 +160,7 @@ pub struct App {
     snapshot_wallpaper: Option<Wallpaper>,
     snapshot_requested: bool,
     auto_pause: AutoPause,
+    gaming_mode: GamingMode,
     frames: u32,
     workshop: WorkshopUi,
 }
@@ -225,8 +226,13 @@ impl App {
         ctx.set_style(style);
         let workshop = WorkshopUi::load(&paths.state);
         let collection = CollectionUi::load(&paths.state);
+        let gaming_mode = GamingMode::load(&paths).unwrap_or_default();
         let mut app = Self {
-            settings_ui: SettingsUi::new(&config, playback.as_ref().copied().unwrap_or_default()),
+            settings_ui: SettingsUi::new(
+                &config,
+                playback.as_ref().copied().unwrap_or_default(),
+                gaming_mode,
+            ),
             renderer_text: config
                 .renderer
                 .as_ref()
@@ -276,6 +282,7 @@ impl App {
             snapshot_wallpaper: None,
             snapshot_requested: false,
             auto_pause: playback.unwrap_or_default(),
+            gaming_mode,
             frames: 0,
             workshop,
         };
@@ -1562,11 +1569,11 @@ impl App {
                 ui.label(RichText::new(format!("{} · {}", state.output, state.title)).strong());
                 ui.colored_label(
                     MUTED,
-                    state.playback_label(),
+                    theme::playback(state.playback_label()),
                 );
                 if let Some(mode) = state.auto_pause {
                     ui.label(format!("Automatic pause: {}", mode.label()));
-                    if mode != AutoPause::Off && state.auto_paused.is_none() {
+                    if mode != AutoPause::Off && state.auto_paused.is_none() && !state.unloaded {
                         ui.colored_label(MUTED, "The renderer pauses and resumes automatically; its current automatic pause state is not reported here.");
                     }
                 }
@@ -1704,14 +1711,9 @@ impl App {
                     if self.busy || self.scanning {
                         ui.spinner();
                     }
-                    let active = self
-                        .status
-                        .states
-                        .iter()
-                        .filter(|s| s.output != "preview")
-                        .count();
                     if !compact && !self.error {
-                        theme::status(ui, &format!("{active} Bildschirme aktiv"), theme::SUCCESS);
+                        let (summary, color) = self.playback_summary();
+                        theme::status(ui, &summary, color);
                         ui.colored_label(MUTED, &self.desktop.name);
                         ui.add_space(14.0);
                     }

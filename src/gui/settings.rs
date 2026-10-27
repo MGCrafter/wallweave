@@ -11,14 +11,16 @@ pub(super) struct SettingsUi {
     pub page: SettingsPage,
     pub draft: Config,
     pub pause: AutoPause,
+    pub gaming: GamingMode,
 }
 
 impl SettingsUi {
-    pub fn new(config: &Config, pause: AutoPause) -> Self {
+    pub fn new(config: &Config, pause: AutoPause, gaming: GamingMode) -> Self {
         Self {
             page: SettingsPage::Playback,
             draft: config.clone(),
             pause,
+            gaming,
         }
     }
 }
@@ -38,6 +40,7 @@ impl App {
             draft.scaling != self.config.scaling,
             draft.libraries != self.config.libraries,
             self.settings_ui.pause != self.auto_pause,
+            self.settings_ui.gaming != self.gaming_mode,
             self.renderer_text.trim() != path_text(&self.config.renderer),
             self.assets_text.trim() != path_text(&self.config.assets),
         ]
@@ -49,6 +52,7 @@ impl App {
     fn discard_settings(&mut self) {
         self.settings_ui.draft = self.config.clone();
         self.settings_ui.pause = self.auto_pause;
+        self.settings_ui.gaming = self.gaming_mode;
         self.renderer_text = path_text(&self.config.renderer);
         self.assets_text = path_text(&self.config.assets);
     }
@@ -62,7 +66,8 @@ impl App {
         let result = self
             .paths
             .save_preferences(&next)
-            .and_then(|()| self.settings_ui.pause.save(&self.paths));
+            .and_then(|()| self.settings_ui.pause.save(&self.paths))
+            .and_then(|()| self.settings_ui.gaming.save(&self.paths));
         match result {
             Ok(()) => {
                 // Preserve assignments changed by the supervisor while the form was open.
@@ -73,12 +78,13 @@ impl App {
                     .unwrap_or_else(|_| self.config.assignments.clone());
                 self.config = next;
                 self.auto_pause = self.settings_ui.pause;
+                self.gaming_mode = self.settings_ui.gaming;
                 self.discard_settings();
                 self.message =
                     "Einstellungen gespeichert. Bibliotheken werden neu eingelesen.".into();
                 self.error = false;
                 self.refresh(ctx);
-                if !self.status.states.is_empty() {
+                if self.status.ok || !self.status.states.is_empty() {
                     self.action(Request::ReloadPlayback, false, ctx);
                 }
             }
@@ -305,6 +311,24 @@ impl App {
             );
         });
         ui.add_space(20.0);
+        theme::section().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(theme::heading("Beim Spielen", 18.0));
+            ui.add_space(8.0);
+            let mut enabled = self.settings_ui.gaming == GamingMode::Unload;
+            if ui.checkbox(&mut enabled, "Grafikspeicher beim Spielen freigeben").changed() {
+                self.settings_ui.gaming = if enabled { GamingMode::Unload } else { GamingMode::Off };
+            }
+            ui.add_space(4.0);
+            ui.label(RichText::new("Entlädt alle Desktop-Wallpaper, solange ein Spiel läuft. Nach Spielende starten sie automatisch wieder – mit deinen bisherigen Einstellungen.").color(MUTED));
+            ui.add_space(8.0);
+            ui.label(RichText::new("Erkennt Steam-Spiele sowie Gamescope- und als Spiel markierte Fenster unter Hyprland. Bleibt auch beim Alt-Tab aktiv. Fenstervorschauen bleiben geöffnet.").small().color(MUTED));
+            if self.status.game_active && self.gaming_mode == GamingMode::Unload {
+                ui.add_space(8.0);
+                theme::status(ui, "Spiel erkannt · Wallpaper entladen", ACCENT);
+            }
+        });
+        ui.add_space(20.0);
         theme::section().show(ui,|ui| {
             ui.set_width(ui.available_width());
             ui.label(theme::heading("Automatisch pausieren",18.0));
@@ -498,7 +522,8 @@ impl App {
                         ui.vertical(|ui|{ui.label(RichText::new(output).size(12.0).color(ACCENT));ui.add(egui::Label::new(RichText::new(&current.title).size(12.0)).truncate());});
                     });
                 }
-                theme::status(ui,&format!("{} Bildschirme aktiv",self.status.states.iter().filter(|s|s.output!="preview").count()),theme::SUCCESS);
+                let (summary, color) = self.playback_summary();
+                theme::status(ui, &summary, color);
                 ui.label(RichText::new(&self.desktop.name).color(MUTED));
                 ui.label(RichText::new(&self.desktop.integration).small().color(MUTED));
             }
@@ -531,7 +556,7 @@ impl App {
                 ),
                 (
                     "Beim Speichern",
-                    "Pausenregeln werden sofort übernommen. Bildrate, Ton und Bildanpassung gelten beim nächsten Anwenden.",
+                    "Spielmodus und Pausenregeln werden sofort übernommen. Bildrate, Ton und Bildanpassung gelten beim nächsten Anwenden.",
                 ),
             ]
         } {
@@ -597,6 +622,7 @@ mod tests {
             .libraries
             .push("/offline/library".into());
         app.settings_ui.pause = AutoPause::Off;
+        app.settings_ui.gaming = GamingMode::Unload;
         app.renderer_text = "/pending/renderer".into();
         app.assets_text = "/pending/assets".into();
         assert!(app.settings_changes() >= 5);
@@ -613,6 +639,11 @@ mod tests {
         );
         app.discard_settings();
         assert_eq!(app.settings_changes(), 0);
+        assert_eq!(app.settings_ui.gaming, GamingMode::Off);
+        assert_eq!(
+            GamingMode::load(&app.paths).expect("gaming preference"),
+            GamingMode::Off
+        );
         assert_eq!(app.settings_ui.draft.fps, original.fps);
         assert_eq!(app.settings_ui.draft.libraries, original.libraries);
     }
@@ -633,6 +664,7 @@ mod tests {
         app.settings_ui.draft.volume = 73;
         app.settings_ui.draft.scaling = "fit".into();
         app.settings_ui.pause = AutoPause::Off;
+        app.settings_ui.gaming = GamingMode::Unload;
         app.renderer_text = "  /offline/renderer  ".into();
         app.assets_text = " /offline/assets ".into();
         app.save_settings(&ctx);
@@ -653,6 +685,10 @@ mod tests {
             AutoPause::Off
         );
         assert_eq!(app.settings_changes(), 0);
+        assert_eq!(
+            GamingMode::load(&app.paths).expect("gaming preference"),
+            GamingMode::Unload
+        );
     }
 
     #[test]
@@ -662,6 +698,7 @@ mod tests {
         app.renderer_text = "relative/renderer".into();
         app.settings_ui.draft.fps = 120;
         app.settings_ui.pause = AutoPause::Off;
+        app.settings_ui.gaming = GamingMode::Unload;
         app.save_settings(&ctx);
         assert!(app.error);
         assert_eq!(
@@ -673,6 +710,10 @@ mod tests {
             AutoPause::Focused
         );
         assert_eq!(app.settings_ui.draft.fps, 120);
+        assert_eq!(
+            GamingMode::load(&app.paths).expect("gaming preference"),
+            GamingMode::Off
+        );
         assert_eq!(app.renderer_text, "relative/renderer");
         assert_ne!(app.config.fps, 120);
     }

@@ -41,11 +41,20 @@ struct OutputState {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct Snapshot(BTreeMap<String, OutputState>);
+pub struct Snapshot {
+    outputs: BTreeMap<String, OutputState>,
+    game_running: bool,
+}
 
 impl Snapshot {
+    pub fn game_running(&self) -> bool {
+        self.game_running
+    }
+    pub fn connected(&self, output: &str) -> bool {
+        self.outputs.contains_key(output)
+    }
     pub fn pauses(&self, output: &str, mode: AutoPause) -> bool {
-        self.0.get(output).is_some_and(|state| match mode {
+        self.outputs.get(output).is_some_and(|state| match mode {
             AutoPause::Off => false,
             AutoPause::Fullscreen => state.fullscreen,
             AutoPause::Focused => state.focused || state.fullscreen,
@@ -80,6 +89,10 @@ struct Window {
     #[serde(default)]
     pinned: bool,
     fullscreen: u8,
+    #[serde(default)]
+    class: String,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -92,7 +105,18 @@ fn parse(monitors: &[u8], clients: &[u8], active: &[u8]) -> Result<Snapshot> {
     let monitors: Vec<Monitor> = serde_json::from_slice(monitors).context("Hyprland monitors")?;
     let clients: Vec<Window> = serde_json::from_slice(clients).context("Hyprland clients")?;
     let active: ActiveWindow = serde_json::from_slice(active).context("Hyprland active window")?;
-    let mut snapshot = Snapshot::default();
+    let game_running = clients.iter().any(|w| {
+        w.mapped
+            && (w.class == "gamescope"
+                || w.class
+                    .strip_prefix("steam_app_")
+                    .is_some_and(|id| id.parse::<u64>().is_ok_and(|id| id != 0 && id != 431960))
+                || w.tags.iter().any(|t| t.trim_end_matches('*') == "game"))
+    });
+    let mut snapshot = Snapshot {
+        game_running,
+        ..Default::default()
+    };
     for monitor in monitors.iter().filter(|m| !m.disabled) {
         let mut state = OutputState::default();
         for window in clients.iter().filter(|w| w.monitor == monitor.id) {
@@ -118,7 +142,7 @@ fn parse(monitors: &[u8], clients: &[u8], active: &[u8]) -> Result<Snapshot> {
             // fullscreenClient is deliberately ignored (client-only fullscreen).
             state.fullscreen |= window.fullscreen & 3 != 0;
         }
-        snapshot.0.insert(monitor.name.clone(), state);
+        snapshot.outputs.insert(monitor.name.clone(), state);
     }
     Ok(snapshot)
 }
@@ -231,6 +255,38 @@ mod tests {
 
     fn window(workspace: i64) -> Value {
         json!({"address":"0x1","monitor":1,"workspace":{"id":workspace},"mapped":true,"hidden":false,"visible":true,"fullscreen":0})
+    }
+
+    #[test]
+    fn games_remain_detected_when_hidden_or_on_another_workspace() {
+        for class in ["steam_app_1422450", "gamescope", "custom-game"] {
+            let mut client = window(-96);
+            client["class"] = json!(class);
+            client["hidden"] = json!(true);
+            client["visible"] = json!(false);
+            if class == "custom-game" {
+                client["tags"] = json!(["game*"]);
+            }
+            let state = snapshot(monitor(0), json!([client]), "other-app");
+            assert!(state.game_running());
+            assert!(!state.pauses("DP-1", AutoPause::Focused));
+            assert!(state.connected("DP-1"));
+            assert!(!state.connected("DP-2"));
+            client["mapped"] = json!(false);
+            assert!(!snapshot(monitor(0), json!([client]), "").game_running());
+        }
+        for class in [
+            "steam",
+            "steam_app_431960",
+            "steam_app_0",
+            "steam_app_invalid",
+            "firefox",
+        ] {
+            let mut client = window(13);
+            client["class"] = json!(class);
+            client["fullscreen"] = json!(2);
+            assert!(!snapshot(monitor(0), json!([client]), "0x1").game_running());
+        }
     }
 
     #[test]
